@@ -3,7 +3,8 @@
  * The native build rejects relocations and generates payload/image checksums.
  * Update manifest ranges when changing patch locations or lengths. */
 .text
-/* Cooperative framebuffer/private-RAM handoff. Preserve old pixels through guest End. */
+/* Cooperative framebuffer/private-RAM handoff. Copy before guest redraws;
+ * indexed modes also need a final copy after the palette reset is repaired. */
 .org 0x1100
 L_00001100:
     mfcr r2
@@ -65,6 +66,8 @@ L_00001100:
     lwz r0, 0x20(r4)
     cmpwi cr7, r0, 8
     bc 12,30,L_000011ec
+    cmpwi cr7, r0, 0x10
+    bc 12,30,L_000011ec
     cmpwi cr7, r0, 0x20
     bc 4,30,L_00001340
 L_000011ec:
@@ -73,7 +76,6 @@ L_000011ec:
     cmplwi cr7, r2, 0x7fff
     bc 12,29,L_00001340
     addi r2, r4, 0x1c
-    nop
     cmpwi cr4, r29, 0
     lwz r0, 0(r2)
     mullw r27, r0, r27
@@ -146,7 +148,6 @@ L_000012f4:
     cmpwi cr3, r31, 0
     stw r29, 0x24(r2)
     stw r29, 0x28(r2)
-    nop
     b L_00001320
 L_00001318:
     li r31, -0x6c
@@ -186,6 +187,7 @@ L_00001358:
     mtocrf 0x10, r11
     mtocrf 8, r11
     blr
+.org 0x1394
 L_00001394:
     lis r11, 0x5e0a
     lwz r11, 0x3530(r11)
@@ -645,10 +647,10 @@ L_0004ce04:
     lis r11, 0x5e0a
     lwz r0, 0x4418(r11)
     cmpwi r0, 0
-    bc 4,2,L_00054af0
+    bc 4,2,L_00054afc
+    lwz r12, 0x10(r31)
     lwz r0, 0x4408(r11)
     b L_00054aa0
-    nop
 .org 0x54364
 L_00054364:
 .org 0x5496c
@@ -704,32 +706,40 @@ L_00054a90:
     b L_0004b900
 L_00054aa0:
     cmpwi r0, 0
-    bc 12,2,L_00054af0
+    bc 12,2,L_00054afc
+    /* In direct-color modes SetMode's copy is sufficient. Keep window-frame details
+     * redrawn since then, instead of replacing them with the old snapshot.
+     * Indexed drawing still needs repair after its temporary palette reset. */
+    lwz r12, 0x20(r12)
+    cmpwi r12, 8
+    bne L_00054ae4
     lwz r3, 0(r31)
     bl L_0007c9cc
     lis r11, 0x5e0a
     stw r3, 0x4e18(r11)
     cmpwi r3, 0
-    bc 4,2,L_00054ad8
+    bc 4,2,L_00054ae4
     lwz r3, 0x440c(r11)
     lwz r4, 0x4408(r11)
     lwz r5, 0x441c(r11)
     bl L_0007a49c
     lwz r3, 0(r31)
     bl L_0007c73c
-L_00054ad8:
+L_00054ae4:
     lis r11, 0x5e0a
     lwz r0, 0x4404(r11)
     cmpwi r0, 0
-    bc 4,2,L_00054af0
+    bc 4,2,L_00054afc
     lwz r3, 0x4408(r11)
     bl L_0007a5fc
-L_00054af0:
+L_00054afc:
     lis r11, 0x5e0a
     li r0, 0
     stw r0, 0x4408(r11)
     stw r0, 0x1d4(r31)
     b L_00054364
+/* The next original function begins here. Do not extend this code cave. */
+.org 0x54b10
 .org 0x556f8
     bc 12,25,L_00055708
 .org 0x55708

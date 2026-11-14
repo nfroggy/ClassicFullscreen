@@ -45,7 +45,7 @@ int main(int argc,char **argv){
  stub(0x5e07c50c,allocate);stub(0x5e07c5fc,release);stub(0x5e07c49c,copy);stub(0x5e07e9cc,hide);stub(0x5e07e73c,show);stub(0x5e07ea9c,base);
  sys_icache_invalidate((void*)0x5e002000,0x80000);
  for(mode=0;mode<7;mode++){width=modes[mode][0];height=modes[mode][1];
- for(depth=8;depth<=32;depth+=24){
+ for(depth=8;depth<=32;depth*=2){
   stride=(width*(depth/8)+255)&~255;length=stride*height;screen=malloc(length);expected=malloc(length);check(screen&&expected,"test buffers");
   for(descriptors=1;descriptors<=2;descriptors++)
   for(k=0;k<14;k++){
@@ -66,11 +66,17 @@ int main(int argc,char **argv){
    }
    if(result||!owned)printf("mode=%u depth=%u case=%u result=%d size=%u h=%08x stride=%u\n",mode,depth,k,result,trace[7],display[6],display[7]);
    check(result==0&&owned&&display[2]==(U)owned&&trace[9]==(U)owned&&trace[10]==length&&!memcmp(owned,expected,length)&&!hidden,"away publishes owned image");
-   /* The observed guest reconfiguration erases the new drawing buffer. */
-   memset(owned,0xff,length);fail_hide=k==9;
+   /* Indexed reconfiguration can erase/recolor pixels while its palette is
+    * reset. At 16/32 bits it paints valid new window-frame details after
+    * SetMode: model those so a stale snapshot copy is a regression. */
+   if(depth==8)memset(owned,0xff,length);
+   else for(i=160;i<length;i+=stride){owned[i]^=0x63;expected[i]^=0x63;}
+   prior_copies=copies;fail_hide=k==9;
    end();
-   if(k==9){check(*(U*)0x5e0a4e18==77&&owned[0]==0xff,"End hide failure skips unsafe copy");memcpy(owned,expected,length);fail_hide=0;}
+   if(depth!=8)check(copies==prior_copies&&!memcmp(owned,expected,length),"direct-color away End preserves newly drawn window details without copying");
+   else if(k==9){check(*(U*)0x5e0a4e18==77&&owned[0]==0xff,"End hide failure skips unsafe copy");memcpy(owned,expected,length);}
    else check(!memcmp(owned,expected,length),"End preserves original picture after guest clear");
+   fail_hide=0;
    prior_copies=copies;prior_frees=frees;ctx[117]=1;end();check(copies==prior_copies&&frees==prior_frees,"duplicate End cannot copy or free stale source");
    memset(screen,0xa5,length);for(i=0;i<length;i+=101){owned[i]^=0x37;expected[i]^=0x37;}
    check(!memcmp(owned,expected,length),"guest draws in RAM while OS X overwrites display");
@@ -83,8 +89,11 @@ int main(int argc,char **argv){
     fail_get=null_get=fail_hide=0;display[7]=stride;result=invoke(0);
    }
    check(result==0&&ctx[116]==0&&display[2]==(U)screen&&owned&&trace[9]==0&&trace[10]==0&&frees==0&&!hidden&&!memcmp(screen,expected,length),"successful return retains source until End");
-   memset(screen,0xee,length);fail_hide=k==10;end();
-   if(k==10)check(*(U*)0x5e0a4e18==77&&screen[0]==0xee,"return hide failure avoids copy and leak");
+   if(depth==8)memset(screen,0xee,length);
+   else for(i=164;i<length;i+=stride){screen[i]^=0x59;expected[i]^=0x59;}
+   prior_copies=copies;fail_hide=k==10;end();
+   if(depth!=8)check(copies==prior_copies&&!memcmp(screen,expected,length),"direct-color return End preserves freshly painted active title bar");
+   else if(k==10)check(*(U*)0x5e0a4e18==77&&screen[0]==0xee,"return hide failure avoids copy and leak");
    else check(!memcmp(screen,expected,length),"return End repairs guest clear without losing away updates");
    check(!owned&&frees==1,"End frees returned RAM exactly once");
    prior_copies=copies;ctx[117]=1;end();check(frees==1&&copies==prior_copies,"duplicate return End cannot double-free or copy freed RAM");
@@ -96,5 +105,5 @@ int main(int argc,char **argv){
   free(screen);free(expected);
  }
  }
- puts("PASS: 392 exact-PPC pixel-retention scenarios with one/two enumerated displays, inactive-target rejection, across seven resolutions at 8/32 bits: both guest clears, native overwrite, away drawing, deferred ownership, failed handoffs, hide failure, retries and duplicate End.");return 0;
+ puts("PASS: 588 exact-PPC pixel-retention scenarios with one/two enumerated displays, inactive-target rejection, across seven resolutions at 8/16/32 bits: indexed guest clears, direct-color redraw preservation, native overwrite, away drawing, deferred ownership, failed handoffs, hide failure, retries and duplicate End.");return 0;
 }

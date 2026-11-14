@@ -177,7 +177,7 @@ static void releaseRegion(void *p) {
 - (BOOL)valid:(CFGraphicsSnapshot)s away:(unsigned)value {
     BOOL geometry = s.width >= 640 && s.width <= 4096 && s.height >= 480 && s.height <= 2160 &&
                     s.width == (int)s.width && s.height == (int)s.height &&
-                    (s.depth == 8 || s.depth == 32) && s.stride >= s.width * (s.depth / 8) &&
+                    CFSupportedDisplayDepth(s.depth) && s.stride >= s.width * (s.depth / 8) &&
                     s.stride <= 32768;
     BOOL backing =
         s.shadow == 0 &&
@@ -556,7 +556,9 @@ static void releaseRegion(void *p) {
 }
 - (void)run {
     CFRequire(geteuid() == 0, @"Controller requires root");
-    CFRequire([CFDigest(CFReadFile(CF_HOST)) isEqual:@"ce245f256c77f61f9439cbf672f2d422"],
+    CFPatches *patches = [[[CFPatches alloc] initWithRoot:@""] autorelease];
+    CFRequire([CFDigest(CFReadFile(CF_HOST))
+                  isEqual:[[patches spec:@"Host"] objectForKey:@"patchedMD5"]],
               @"Unexpected Classic host");
     task = CFClassicTask(pid);
     uint32_t ctx = CFWord(task, 0x5e0a3530);
@@ -767,11 +769,26 @@ void CFControllerPolicyTests(void) {
         s.away = 1;
         s.width = 1024;
         s.height = 768;
-        s.depth = 8;
-        s.stride = 1024;
         s.trace[9] = s.bases[0];
+        unsigned depth;
+        for (depth = 0; depth <= 64; depth++) {
+            BOOL supported = depth == 8 || depth == 16 || depth == 32;
+            CFRequire(CFSupportedDisplayDepth(depth) == supported,
+                      @"Startup/monitor display-depth policy is inconsistent");
+            s.depth = depth;
+            s.stride = (1024 * depth + 7) / 8;
+            s.trace[10] = s.stride * s.height;
+            CFRequire([c valid:s away:1] == supported,
+                      @"Private-buffer display-depth policy is inconsistent");
+            if (supported) {
+                s.stride--;
+                s.trace[10] = s.stride * s.height;
+                CFRequire(![c valid:s away:1], @"Undersized color-mode stride accepted");
+            }
+        }
+        s.depth = 16;
+        s.stride = 2048;
         s.trace[10] = s.stride * s.height;
-        CFRequire([c valid:s away:1], @"Valid private RAM rejected");
         s.trace[10]--;
         CFRequire(![c valid:s away:1], @"Invalid RAM allocation size accepted");
         CGRect d = CGRectMake(0, 0, 1024, 768);

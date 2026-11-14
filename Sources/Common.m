@@ -33,6 +33,10 @@ void CFRequire(BOOL ok, NSString *message) {
     if (!ok)
         CFFail(@"%@", message);
 }
+BOOL CFSupportedDisplayDepth(unsigned depth) {
+    /* Tiger framebuffer storage: indexed, 5:5:5 RGB, and 8:8:8 RGB. */
+    return depth == 8 || depth == 16 || depth == 32;
+}
 double CFMonotonicTime(void) {
     static mach_timebase_info_data_t scale = {0, 0};
     if (!scale.denom)

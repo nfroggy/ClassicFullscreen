@@ -253,10 +253,10 @@ void CFPreflight(void) {
               @"This version supports one active display. Disable additional displays before starting.");
     unsigned w = CGDisplayPixelsWide(d), h = CGDisplayPixelsHigh(d),
              depth = CGDisplayBitsPerPixel(d), stride = CGDisplayBytesPerRow(d);
-    CFRequire((depth == 8 || depth == 32) && w >= 640 && w <= 4096 && h >= 480 && h <= 2160 &&
+    CFRequire(CFSupportedDisplayDepth(depth) && w >= 640 && w <= 4096 && h >= 480 && h <= 2160 &&
                   stride >= w * (depth / 8) && stride <= 32768 && CGDisplayIsActive(d) &&
                   !CGDisplayIsCaptured(d),
-              @"Display must be awake and uncaptured, at 256 or Millions of Colors");
+              @"Display must be awake and uncaptured, at 256, Thousands, or Millions of Colors");
     CFSLog(@"Preflight passed: %ux%u, %u-bit; display settings left unchanged", w, h, depth);
 }
 static void stopController(pid_t *child, pid_t classic) {
@@ -354,7 +354,7 @@ static void monitor(task_t task, pid_t pid, pid_t ui, pid_t *controller, pid_t *
                         NO, -1);
                     CFSLog(@"Controller PID %d", *controller);
                 }
-                BOOL valid = (depth == 8 || depth == 16 || depth == 32) && stride > 0;
+                BOOL valid = CFSupportedDisplayDepth(depth) && stride > 0;
                 BOOL unequal = depth != CGDisplayBitsPerPixel(display) ||
                                stride != CGDisplayBytesPerRow(display);
                 mismatch = ready && valid && unequal ? mismatch + 1 : 0;

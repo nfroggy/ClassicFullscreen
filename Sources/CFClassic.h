@@ -29,6 +29,7 @@ extern volatile sig_atomic_t CFInterrupted;
 void CFFail(NSString *format, ...) __attribute__((noreturn));
 void CFSLog(NSString *format, ...);
 void CFRequire(BOOL ok, NSString *message);
+BOOL CFSupportedDisplayDepth(unsigned depth);
 double CFMonotonicTime(void);
 NSString *CFDigest(NSData *data);
 NSData *CFReadFile(NSString *path);
