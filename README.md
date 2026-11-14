@@ -18,11 +18,13 @@ The goal with this project was to have the "best of both worlds". You can run OS
 2. Install Classic using a 9.2.2 system folder and applications folder. If you don't have one, or if the launcher complains about a file not matching, [this one](https://macintoshgarden.org/apps/mac-os-922-powermac-g4-mdd) works.
 3. Start Classic normally through the settings pane. It will say it's updating the system folder. If you used the system folder I linked above, it will complain about Quicktime. Stop Classic.
 4. If it complained about Quicktime, start Classic through the settings pane again. It will complain about Quicktime again. Check "don't show again". Stop Classic.
-5. Run Classic through the fullscreen launcher. It will ask for your password due to having to patch system files, then launch Classic in fullscreen. You should see the OS 9 Finder and Control Strip (if your system folder has Control Strip) and can run OS 9 software at this point.
+5. Run Classic through the fullscreen launcher. It will ask for your password due to having to patch system files, then launch Classic in fullscreen. You should see the OS 9 Finder and Control Strip (if your system folder has Control Strip) and can run OS 9 software at this point. After you exit fullscreen Classic, the launcher will restore your original system files so you can run stock Classic.
 
 ## Usage tips
 
 - Once you're in fullscreen Classic, your running OS X software will show up in the application switcher. Clicking on an OS X application will switch from Classic back to OS X. You can then switch back to OS 9 by clicking the icon of a running OS 9 program or the ClassicFullscreen launcher in the dock.
+
+- You can exit Classic by going to Special -> Shut Down in Finder.
 
 - If Classic freezes, you can force-quit it by pressing Cmd+Opt+Ctrl+F12. Note that you also have to press "fn" on a Mac layout keyboard.
 
