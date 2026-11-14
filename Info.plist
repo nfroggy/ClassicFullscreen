@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple Computer//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleExecutable</key><string>ClassicFullscreen</string>
+<key>CFBundleIdentifier</key><string>org.classicfullscreen.native</string>
+<key>CFBundleName</key><string>ClassicFullscreen</string>
+<key>CFBundleIconFile</key><string>Finder.icns</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleSignature</key><string>ClSw</string>
+<key>CFBundleVersion</key><string>26.0</string>
+<key>CFBundleShortVersionString</key><string>26.0</string>
+<key>LSBackgroundOnly</key><true/>
+<key>LSMinimumSystemVersion</key><string>10.4</string>
+</dict></plist>
