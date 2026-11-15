@@ -475,11 +475,19 @@
 			</dict>
 			<dict>
 				<key>offset</key>
-				<integer>1486412</integer>
+				<integer>375592</integer>
 				<key>length</key>
 				<integer>4</integer>
 				<key>payloadOffset</key>
 				<integer>8</integer>
+			</dict>
+			<dict>
+				<key>offset</key>
+				<integer>1486412</integer>
+				<key>length</key>
+				<integer>4</integer>
+				<key>payloadOffset</key>
+				<integer>12</integer>
 			</dict>
 		</array>
 	</dict>

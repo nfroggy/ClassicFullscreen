@@ -13,6 +13,11 @@ L_000195ec:
 /* Test no-write permission rather than not-owner before serializing folder layout. */
 .org 0x50e88
     rlwinm. r0, r0, 0x1e, 0x1f, 0x1f
+/* The shared file/folder serializer separately checks the CONTAINING folder
+ * before copying icon positions (and folder-layout flags). A writable folder
+ * owned by root is not read-only. Keep the absent-container/error paths. */
+.org 0x5bb28
+    rlwinm. r0, r0, 0x1e, 0x1f, 0x1f
 /* Use Finder's existing synchronous catalog-save path. */
 .org 0x16ae4c
     b L_0016ae84

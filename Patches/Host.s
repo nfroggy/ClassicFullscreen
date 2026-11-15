@@ -285,12 +285,18 @@ L_000014f4:
     b L_0004b8c0
     .long 0  /* verified unused padding */
 L_00001500:
+    /* Retry an access-denied catalog save using only its two FinderInfo
+     * blocks, provided all three dates are unchanged. Applies to files AND
+     * folders. Resolve a stable FSRef/FSSpec, reread by its parent/name and
+     * verify the node ID before writing through the same FSRef. Permissions
+     * remain enforced by FSSetCatalogInfo; genuine date changes still fail.
+     * Stack: make=0x38, ref=0x80, current=0xd0, info=0x13c, spec=0x1d0. */
     mflr r0
     stmw r27, -0x14(r1)
     mr r31, r3
     stw r0, 8(r1)
     lis r0, 0x5e07
-    stwu r1, -0x200(r1)
+    stwu r1, -0x240(r1)
     ori r0, r0, 0xce3c
     mtctr r0
     mr r12, r0
@@ -328,16 +334,13 @@ L_00001500:
     ori r0, r0, 0xce2c
     mr r5, r27
     li r6, 0
-    li r7, 0
+    addi r7, r1, 0x1d0
     mtctr r0
     li r8, 0
     mr r12, r0
     bctrl
     cmpwi cr7, r3, 0
     bc 4,30,L_000016cc
-    lhz r0, 0x13c(r1)
-    andi. r2, r0, 0x10
-    bc 12,2,L_000016cc
     mtctr r30
     addi r29, r1, 0xd0
     li r4, 0
@@ -345,23 +348,24 @@ L_00001500:
     mr r12, r30
     mr r3, r29
     bctrl
-    lhz r0, 0x13e(r1)
-    lwz r2, 0x144(r1)
+    lhz r0, 0x1d0(r1)
+    lwz r2, 0x1d2(r1)
     lis r9, 0x5e07
     mr r3, r29
     ori r9, r9, 0xce8c
     mtctr r9
     sth r0, 0xe6(r1)
-    li r0, -1
+    addi r0, r1, 0x1d6
     stw r2, 0x100(r1)
-    sth r0, 0xec(r1)
+    stw r0, 0xe2(r1)
     mr r12, r9
     bctrl
     cmpwi cr7, r3, 0
     bc 4,30,L_000016cc
-    lbz r0, 0xee(r1)
-    andi. r2, r0, 0x10
-    bc 12,2,L_000016cc
+    lwz r0, 0x100(r1)
+    lwz r2, 0x144(r1)
+    cmpw cr7, r2, r0
+    bc 4,30,L_000016cc
     lwz r0, 0x48(r31)
     lwz r2, 0x118(r1)
     cmpw cr7, r2, r0
@@ -403,11 +407,12 @@ L_00001500:
 L_000016cc:
     li r3, -0x1388
 L_000016d0:
-    addi r1, r1, 0x200
+    addi r1, r1, 0x240
     lwz r0, 8(r1)
     lmw r27, -0x14(r1)
     mtlr r0
     blr
+.org 0x16e4
 L_000016e4:
     lis r12, 0x5e0a
     lwz r11, 0x4410(r12)
