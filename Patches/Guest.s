@@ -79,6 +79,33 @@ L_0002a40c:
 /* Keep Finder desktop ownership without the port-breaking Finder rename. */
 .org 0x2aad8
     b L_0002ab68
+/* The skipped Finder-rename block supplies room for exit bookkeeping.
+ * Remember the dying process kind before its PEntry is freed. Native proxy
+ * death must follow the host's current front process, not our guest-only
+ * successor filter. The normal guest exit policy remains unchanged. */
+L_capture_exit_kind:
+    lwz r3, 0x3c(r1)
+    lwz r3, 0x3c(r3)
+    stw r3, 0x88(r1)
+    li r0, 0
+    b L_0002f674
+L_native_exit_successor:
+    lwz r4, 0x88(r1)
+    andis. r4, r4, 0x100
+    bc 12,2,L_normal_exit_successor
+    addi r3, r1, 0x80
+    bl L_0004d42c
+    lwz r2, 0x14(r1)
+    cmpwi r3, 0
+    bc 4,2,L_normal_exit_successor
+    addi r3, r1, 0x80
+    bl L_0002fc54
+    cmpwi r3, 0
+    bc 12,2,L_normal_exit_successor
+    b L_0002fa18
+L_normal_exit_successor:
+    lwz r3, 0x295c(r2)
+    b L_0002f934
 .org 0x2ab68
 L_0002ab68:
 .org 0x2d154
@@ -102,7 +129,8 @@ L_0002e304:
 L_0002ed8c:
 /* Remember a valid guest successor before the application exits. */
 .org 0x2f670
-    li r0, 0
+    b L_capture_exit_kind
+L_0002f674:
     stw r0, 0x7c(r1)
     lwz r3, -0x30c(r2)
     lbz r4, 0(r3)
@@ -173,7 +201,8 @@ L_0002f920:
     lbz r3, 0x54(r1)
     cmpwi r3, 0
     bc 12,2,L_0002fa24
-    lwz r3, 0x295c(r2)
+    b L_native_exit_successor
+L_0002f934:
     cmpwi r3, 0
     bc 4,2,L_0002f9b0
     bl L_0003d184

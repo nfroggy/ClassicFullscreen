@@ -16,6 +16,9 @@ typedef struct {
     NSMutableArray *hidden, *pendingUI;
     NSMutableDictionary *raised;
     UInt32 guest, native;
+    ProcessSerialNumber nativeExitTarget;
+    OSStatus nativeExitError;
+    double nextNativeExit;
     BOOL away, prepared, coverActive;
     char redrawToken;
     NSData *lastClip;
@@ -33,6 +36,7 @@ typedef struct {
 - (void)returnClassic:(UInt32)front;
 - (void)showOSX:(UInt32)front finder:(BOOL)finder;
 - (void)updateGL:(CFFront)front;
+- (void)refreshNativeExit;
 @end
 static void interrupted(int sig) {
     CFInterrupted = sig;
@@ -273,6 +277,8 @@ static void releaseRegion(void *p) {
         CFFail(@"Activation failed: %@ (helper status %d)", action, status);
 }
 - (void)returnClassic:(UInt32)front {
+    [self user:@"clear-exit" target:0];
+    memset(&nativeExitTarget, 0, sizeof(nativeExitTarget));
     CFWriteState('B');
     [self handoff:YES];
     [self waitIdle:(uint32_t[8]){0}];
@@ -330,6 +336,8 @@ static void releaseRegion(void *p) {
     CFWriteState('B');
     [self handoff:YES];
     [self user:@"clear-exit" target:0];
+    memset(&nativeExitTarget, 0, sizeof(nativeExitTarget));
+    [self refreshNativeExit];
     NSArray *windows = [self windows:YES];
     unsigned i;
     for (i = 0; i < [windows count]; i++) {
@@ -348,8 +356,16 @@ static void releaseRegion(void *p) {
     int menuStatus = CFUserAction([NSArray arrayWithObject:@"repair-menu"], 2);
     if (menuStatus)
         CFSLog(@"Native menu repair did not complete (status %d)", menuStatus);
+    [self refreshNativeExit];
     CFWriteState('A');
     CFSLog(@"OS X visible; selected application keeps focus");
+}
+- (void)refreshNativeExit {
+    OSStatus err = CFRefreshNativeExitTarget(pid, &nativeExitTarget);
+    if (err && err != nativeExitError)
+        CFSLog(@"OS X exit target refresh: %ld", (long)err);
+    nativeExitError = err;
+    nextNativeExit = CFMonotonicTime() + 0.25;
 }
 - (NSArray *)glRows:(CGRect)display {
     NSArray *visible = [self windows:YES];
@@ -653,6 +669,8 @@ static void releaseRegion(void *p) {
                     away = NO;
                 }
                 if (away) {
+                    if (CFMonotonicTime() >= nextNativeExit)
+                        [self refreshNativeExit];
                     NSArray *appeared = [self windows:YES];
                     unsigned i;
                     for (i = 0; i < [appeared count]; i++) {

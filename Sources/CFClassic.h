@@ -80,6 +80,8 @@ typedef struct {
     BOOL foreground;
 } CFFront;
 CFFront CFFrontProcess(pid_t host);
+OSStatus CFRefreshNativeExitTarget(pid_t host, ProcessSerialNumber *installed);
+void CFNativeExitPolicyTests(void);
 BOOL CFFullscreenRect(CGRect r, CGRect d);
 BOOL CFDrawableRect(CGRect r, CGRect d);
 

@@ -196,6 +196,7 @@ int CFSelfTests(NSString *fixtures) {
     CFRequire(geteuid() == 0,
               @"Native fork/owner tests require root; only disposable /tmp files are written");
     elapsedTimeTests();
+    CFNativeExitPolicyTests();
     char pattern[] = "/tmp/classic-native-tests-XXXXXX";
     CFRequire(mkdtemp(pattern) != NULL, @"Cannot create scratch directory");
     NSString *root = [NSString stringWithUTF8String:pattern];
