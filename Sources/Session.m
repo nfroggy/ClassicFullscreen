@@ -291,6 +291,62 @@ static BOOL childExited(pid_t *child) {
     }
     return NO;
 }
+static void startEmergency(pid_t classic, pid_t *watcher) {
+    int readyPipe[2];
+    CFRequire(pipe(readyPipe) == 0, @"Cannot prepare watcher readiness channel");
+    fcntl(readyPipe[0], F_SETFD, FD_CLOEXEC);
+    fcntl(readyPipe[1], F_SETFD, FD_CLOEXEC);
+    @try {
+        *watcher = CFSpawn(
+            [NSArray arrayWithObjects:@"--emergency", [NSString stringWithFormat:@"%d", classic],
+                     [CF_RUN stringByAppendingPathComponent:@"session.emergency"], nil],
+            NO, readyPipe[1]);
+        close(readyPipe[1]);
+        readyPipe[1] = -1;
+        char c = 0;
+        CFRequire(CFReadable(readyPipe[0], 5) && read(readyPipe[0], &c, 1) == 1 && c == 'R',
+                  @"Emergency watcher did not become ready");
+    } @finally {
+        close(readyPipe[0]);
+        if (readyPipe[1] >= 0)
+            close(readyPipe[1]);
+    }
+}
+static void stopEmergency(pid_t *watcher) {
+    if (*watcher > 0) {
+        kill(*watcher, SIGTERM);
+        CFWait(*watcher, 2, YES);
+        *watcher = 0;
+    }
+}
+static pid_t replacementClassic(pid_t previous, pid_t ui) {
+    /* Special -> Restart exits TruBlueEnvironment and launches another copy
+     * through Apple's Classic Startup app. Allow the launch gap without
+     * treating the old task's death as the end of the fullscreen session. */
+    double start = CFMonotonicTime(), deadline = start + 2;
+    NSString *launcher = @"/System/Library/CoreServices/Classic Startup.app/Contents/MacOS/Classic Startup";
+    while (!CFInterrupted && CFMonotonicTime() < deadline) {
+        NSArray *pids = CFClassicPIDs();
+        pid_t next = 0;
+        unsigned i;
+        for (i = 0; i < [pids count]; i++) {
+            pid_t candidate = [[pids objectAtIndex:i] intValue];
+            if (candidate != previous) {
+                CFRequire(!next, @"More than one replacement Classic process");
+                next = candidate;
+            }
+        }
+        if (next)
+            return next;
+        CFRequire([CFProcessPath(ui) isEqual:CFExecutable], @"Native UI exited during restart");
+        if ([CFProcessesAtPath(launcher) count])
+            /* Keep waiting while Startup is alive, but finish promptly if it
+             * exits without a replacement (for example after a force quit). */
+            deadline = MIN(start + 120, CFMonotonicTime() + 2);
+        usleep(100000);
+    }
+    return 0;
+}
 static void monitor(task_t task, pid_t pid, pid_t ui, pid_t *controller, pid_t *emergency) {
     CGDirectDisplayID display = CGMainDisplayID();
     unsigned width = CGDisplayPixelsWide(display), height = CGDisplayPixelsHigh(display);
@@ -368,6 +424,12 @@ static void monitor(task_t task, pid_t pid, pid_t ui, pid_t *controller, pid_t *
                 CFFail(@"Switch controller exited; requesting normal shutdown");
             usleep(1000000);
         } @catch (id exception) {
+            /* Restart can retire the task between two reads. The next task
+             * gets a fresh monitor; a dead task is not a controller failure. */
+            if (!CFTaskAlive(task, pid)) {
+                [pool release];
+                break;
+            }
             /* Tiger's exception runtime does not retain objects across a pool drain. */
             [exception retain];
             [pool release];
@@ -460,33 +522,29 @@ int CFGuardian(pid_t ui, BOOL recovery) {
                 usleep(250000);
             }
             CFRequire(classic > 0, @"Classic process did not appear");
-            task = CFClassicTask(classic);
-            int readyPipe[2];
-            CFRequire(pipe(readyPipe) == 0, @"Cannot prepare watcher readiness channel");
-            fcntl(readyPipe[0], F_SETFD, FD_CLOEXEC);
-            fcntl(readyPipe[1], F_SETFD, FD_CLOEXEC);
-            @try {
-                emergency = CFSpawn(
-                    [NSArray
-                        arrayWithObjects:@"--emergency", [NSString stringWithFormat:@"%d", classic],
-                                         [CF_RUN
-                                             stringByAppendingPathComponent:@"session.emergency"],
-                                         nil],
-                    NO, readyPipe[1]);
-                close(readyPipe[1]);
-                readyPipe[1] = -1;
-                char c = 0;
-                CFRequire(CFReadable(readyPipe[0], 5) && read(readyPipe[0], &c, 1) == 1 && c == 'R',
-                          @"Emergency watcher did not become ready");
-            } @finally {
-                close(readyPipe[0]);
-                if (readyPipe[1] >= 0)
-                    close(readyPipe[1]);
+            for (;;) {
+                task = CFClassicTask(classic);
+                startEmergency(classic, &emergency);
+                CFSLog(@"Classic PID %d, independent emergency watcher PID %d", classic, emergency);
+                monitor(task, classic, ui, &controller, &emergency);
+                /* An interrupted guardian still needs its watcher while the
+                 * common cleanup waits for normal guest shutdown. */
+                if (CFTaskAlive(task, classic))
+                    break;
+                stopController(&controller, classic);
+                stopEmergency(&emergency);
+                mach_port_deallocate(mach_task_self(), task);
+                task = MACH_PORT_NULL;
+                CFWriteState('P');
+                pid_t next = replacementClassic(classic, ui);
+                if (!next)
+                    break;
+                CFSLog(@"Classic restart: replacing PID %d with PID %d", classic, next);
+                classic = next;
             }
-            close(emergencyFD);
-            emergencyFD = -1;
-            CFSLog(@"Classic PID %d, independent emergency watcher PID %d", classic, emergency);
-            monitor(task, classic, ui, &controller, &emergency);
+            /* Keep the guardian's FIFO descriptor open across task changes.
+             * It does not read while watchers own the channel: an F12 queued
+             * in the launch gap is delivered to the replacement watcher. */
         }
     } @catch (NSException *e) {
         error = [[e reason] copy];
@@ -503,11 +561,7 @@ int CFGuardian(pid_t ui, BOOL recovery) {
             while ([CFClassicPIDs() count])
                 usleep(250000);
         }
-        if (emergency > 0) {
-            kill(emergency, SIGTERM);
-            CFWait(emergency, 2, YES);
-            emergency = 0;
-        }
+        stopEmergency(&emergency);
         if (attempted) {
             CFUserAction([NSArray arrayWithObject:@"clear-exit"], 3);
             NSArray *names =

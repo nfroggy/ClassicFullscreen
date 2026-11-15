@@ -323,3 +323,11 @@ L_0004e224:
 .org 0xd2a94
     li r3, 0
 .org 0xd2a9c
+/* DragManagerINITIALIZE: keep drags inside the OS 9 Drag Manager.
+ * CoreDrag only routes drops through native window regions. Finder's desktop
+ * has an empty native structure region, so a desktop drop never reaches the
+ * guest receive handler in fullscreen. Leave the bridge disabled consistently
+ * for registration, tracking, flavor data and drop locations; changing only
+ * TrackDrag would mix the two protocols. These patches are session-scoped. */
+.org 0x1f20dc
+    li r7, 0

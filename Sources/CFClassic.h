@@ -39,6 +39,7 @@ char CFReadState(void);
 BOOL CFReadable(int fd, double timeout);
 NSString *CFProcessPath(pid_t pid);
 NSArray *CFClassicPIDs(void);
+NSArray *CFProcessesAtPath(NSString *path);
 BOOL CFTaskAlive(task_t task, pid_t pid);
 task_t CFClassicTask(pid_t pid);
 void CFReadMemory(task_t task, uint32_t address, void *out, size_t size);

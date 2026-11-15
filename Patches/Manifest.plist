@@ -428,6 +428,14 @@
 				<key>payloadOffset</key>
 				<integer>892</integer>
 			</dict>
+			<dict>
+				<key>offset</key>
+				<integer>2040028</integer>
+				<key>length</key>
+				<integer>4</integer>
+				<key>payloadOffset</key>
+				<integer>896</integer>
+			</dict>
 		</array>
 	</dict>
 	<dict>

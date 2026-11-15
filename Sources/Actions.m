@@ -255,19 +255,21 @@ int CFActions(NSArray *args) {
     }
     if (!guestFinder.lowLongOfPSN)
         return 1;
-    if ([op isEqual:@"stop"]) {
+    if ([op isEqual:@"stop"] || [op isEqual:@"restart"]) {
+        BOOL restart = [op isEqual:@"restart"];
         AEAddressDesc address = {typeNull, NULL};
         AppleEvent event = {typeNull, NULL};
         OSStatus err =
             AECreateDesc(typeProcessSerialNumber, &guestFinder, sizeof(guestFinder), &address);
         if (!err)
-            err = AECreateAppleEvent('FNDR', 'shut', &address, kAutoGenerateReturnID,
+            err = AECreateAppleEvent('FNDR', restart ? kAERestart : kAEShutDown,
+                                     &address, kAutoGenerateReturnID,
                                      kAnyTransactionID, &event);
         if (!err)
             err = AESendMessage(&event, NULL, kAENoReply | kAECanInteract, kAEDefaultTimeout);
         AEDisposeDesc(&event);
         AEDisposeDesc(&address);
-        CFSLog(@"Normal Classic shutdown request: %ld", (long)err);
+        CFSLog(@"Normal Classic %@ request: %ld", restart ? @"restart" : @"shutdown", (long)err);
         return err != 0;
     }
     if ([op isEqual:@"return"]) {

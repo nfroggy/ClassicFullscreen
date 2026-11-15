@@ -124,7 +124,7 @@ NSString *CFProcessPath(pid_t pid) {
         return nil;
     return [NSString stringWithUTF8String:args];
 }
-NSArray *CFClassicPIDs(void) {
+NSArray *CFProcessesAtPath(NSString *path) {
     int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0};
     size_t size = 0;
     struct kinfo_proc *p = NULL;
@@ -138,13 +138,16 @@ NSArray *CFClassicPIDs(void) {
         CFRequire(sysctl(mib, 4, p, &size, NULL, 0) == 0, @"Cannot inspect process list");
         for (i = 0; i < size / sizeof(*p); i++) {
             pid_t pid = p[i].kp_proc.p_pid;
-            if (pid > 1 && [CFProcessPath(pid) isEqual:CF_HOST])
+            if (pid > 1 && [CFProcessPath(pid) isEqual:path])
                 [a addObject:[NSNumber numberWithInt:pid]];
         }
     } @finally {
         free(p);
     }
     return a;
+}
+NSArray *CFClassicPIDs(void) {
+    return CFProcessesAtPath(CF_HOST);
 }
 BOOL CFTaskAlive(task_t task, pid_t pid) {
     int current = 0;
