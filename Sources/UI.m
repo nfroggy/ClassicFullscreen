@@ -20,8 +20,10 @@ static void alert(NSString *message) {
     DialogRef dialog = NULL;
     OSStatus r = CreateStandardAlert(kAlertStopAlert, CFSTR("ClassicFullscreen"),
                                      (CFStringRef)message, NULL, &dialog);
-    if (!r)
+    if (!r) {
+        SetFrontProcess(&uiPSN);
         RunStandardAlert(dialog, NULL, NULL);
+    }
 }
 static OSStatus repaint(void) {
     WindowRef window;
@@ -169,10 +171,6 @@ static pascal OSStatus eventHandler(EventHandlerCallRef next, EventRef event, vo
 int CFUI(BOOL authorize, BOOL recovery) {
     CFRequire(getuid() == CFUserID, @"Launch the app from your desktop account, without sudo.");
     CFRequireConsoleUser();
-    if (authorize && [CFClassicPIDs() count]) {
-        alert(@"Please stop Classic before starting or restoring a fullscreen session.");
-        return 1;
-    }
     signal(SIGPIPE, SIG_IGN);
     restoreRequested = recovery;
     startPending = authorize;
@@ -187,6 +185,13 @@ int CFUI(BOOL authorize, BOOL recovery) {
     if (!err)
         err = CPSSetProcessName(&uiPSN, "Classic");
     CFRequire(err == 0, @"Cannot prepare native UI");
+    /* LSBackgroundOnly keeps helper invocations out of the Dock. Even an
+     * early refusal needs a foreground UI process for its modal alert to
+     * receive mouse/keyboard events on Tiger. Do this before session setup. */
+    if (authorize && [CFClassicPIDs() count]) {
+        alert(@"Please stop Classic before starting or restoring a fullscreen session.");
+        return 1;
+    }
     MenuRef menu;
     CFRequire(CreateNewMenu(128, 0, &menu) == 0, @"Cannot create session menu");
     SetMenuTitleWithCFString(menu, CFSTR("Desktop"));

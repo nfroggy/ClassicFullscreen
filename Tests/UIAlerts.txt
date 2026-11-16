@@ -1,0 +1,25 @@
+Revision 36: dismissible early startup errors
+
+ClassicFullscreen has LSBackgroundOnly so controller/guardian/action helpers
+never appear in the Dock. The early "Please stop Classic" refusal used to
+create its alert before CFUI transformed the launcher into a foreground
+application. Tiger displayed the modal window, but the launcher stayed a
+background process and the OK button did not receive ordinary mouse input.
+
+CFUI now registers/transforms its UI process before checking for an existing
+Classic instance. The shared alert helper brings that UI process forward
+before RunStandardAlert. The refusal still returns before authorization,
+session IPC, hotkey registration or any patch installation.
+
+Hardware check, iBook G4 / Tiger 10.4.11 / Xcode 2.5, 2026-11-16:
+  Start stock Classic, then open ClassicFullscreen through Launch Services.
+  Revision 35: process modeOnlyBackground=1, not foreground. A mouse down/up
+  at the visible OK button leaves the dialog and launcher running.
+  Revision 36: modeOnlyBackground=0, foreground. The same mouse click dismisses
+  the alert and exits the launcher. Reopening and pressing Return also exits.
+  The existing TruBlueEnvironment PID stays alive throughout; no fullscreen
+  session.state appears and the Host/Finder/Classic fingerprints stay stock.
+
+For manual regression, repeat with stock Classic already running: launch the
+fullscreen app, click OK, then launch again and press Return. Both should
+close the error without stopping Classic or asking for administrator access.
