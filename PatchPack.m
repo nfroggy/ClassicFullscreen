@@ -166,6 +166,13 @@ int main(int argc, char **argv) {
         need(!err, @"Select a Classic System Folder, or set PATCH_BASELINES to verified originals");
         systemFolder = [NSString stringWithUTF8String:(char *)path];
     }
+    /* Runtime-only code has no on-disk target. Assemble and fingerprint it
+     * with the same relocation/bounds validation as the file patches. */
+    NSMutableDictionary *sleep = [NSMutableDictionary dictionaryWithContentsOfFile:
+        [[manifest stringByDeletingLastPathComponent] stringByAppendingPathComponent:@"Sleep.plist"]];
+    need(sleep != nil, @"Missing runtime sleep manifest");
+    NSData *sleepPayload = pack(sleep, objects);
+    [sleep setObject:md5(sleepPayload) forKey:@"payloadMD5"];
     NSMutableArray *generated = [NSMutableArray array];
     NSMutableDictionary *byName = [NSMutableDictionary dictionary],
                         *payloads = [NSMutableDictionary dictionary],
@@ -227,6 +234,9 @@ int main(int argc, char **argv) {
     }
     need([generated writeToFile:[output stringByAppendingPathComponent:@"Manifest.plist"]
                      atomically:YES], @"Cannot write generated patch manifest");
+    need([sleepPayload writeToFile:[output stringByAppendingPathComponent:@"Sleep.bin"] atomically:YES] &&
+         [sleep writeToFile:[output stringByAppendingPathComponent:@"Sleep.plist"] atomically:YES],
+         @"Cannot write runtime sleep payload");
     [pool release];
     return 0;
 }

@@ -3,6 +3,7 @@
 #import <Foundation/Foundation.h>
 #import <Security/Authorization.h>
 #import <Security/AuthorizationTags.h>
+#include <IOKit/IOKitLib.h>
 #include <mach/mach.h>
 #include <signal.h>
 #include <sys/types.h>
@@ -11,6 +12,8 @@
     @"/System/Library/CoreServices/Classic Startup.app/Contents/Resources/TruBlueEnvironment"
 #define CF_RUN @"/var/run/classic-fullscreen-switch"
 #define CF_MAIL 0x5e0a4100U
+/* Separate from window/clip commands; in the host's unused DATA tail. */
+#define CF_SLEEP_MAIL 0x5e0a4500U
 extern uid_t CFUserID;
 extern gid_t CFGroupID;
 extern NSString *CFUserName;
@@ -55,6 +58,25 @@ int CFEmergency(int argc, char **argv, uid_t owner);
 int CFSelfTests(NSString *fixtures);
 void CFPreflight(void);
 void CFVerifyCoreGraphics(NSData *data);
+
+@interface CFPower : NSObject {
+    void *notificationPort;
+    io_connect_t powerConnection;
+    io_object_t powerNotifier;
+    BOOL willSleep, woke, canceled;
+    task_t bridgeTask;
+    vm_address_t bridgeCode;
+    uint32_t sleepVector, originalSleep;
+    BOOL bridgePublished;
+}
+- (void)drain;
+- (IOReturn)sleepWithTask:(task_t)task pid:(pid_t)pid;
+@end
+
+@interface CFPower (Bridge)
+- (void)installBridge:(task_t)task;
+- (void)removeBridge;
+@end
 
 @interface CFPatches : NSObject {
     NSArray *specs;

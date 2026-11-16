@@ -24,6 +24,7 @@ typedef struct {
     NSData *lastClip;
     vm_address_t clipMemory;
     CGRect lastDisplay;
+    CFPower *power;
 }
 - (id)initWithPID:(pid_t)p;
 - (void)run;
@@ -99,6 +100,7 @@ static void releaseRegion(void *p) {
     [pendingUI release];
     [raised release];
     [lastClip release];
+    [power release];
     if (pipeFD >= 0)
         close(pipeFD);
     if (task)
@@ -598,6 +600,17 @@ static void releaseRegion(void *p) {
     CFRequire(pipeFD >= 0, @"Cannot open switch request channel");
     fcntl(pipeFD, F_SETFD, FD_CLOEXEC);
     prepared = YES;
+    power = [[CFPower alloc] init];
+    CFRequire(power != nil, @"Cannot register system sleep/wake notifications");
+    uint32_t sleepMail[8] = {0};
+    CFReadMemory(task, CF_SLEEP_MAIL, sleepMail, sizeof(sleepMail));
+    CFRequire(!(sleepMail[0] | sleepMail[1] | sleepMail[2] | sleepMail[3] |
+                sleepMail[4] | sleepMail[5] | sleepMail[6] | sleepMail[7]),
+              @"Sleep mailbox already in use");
+    [power installBridge:task];
+    sleepMail[0] = 'ClSl';
+    CFRequire(vm_write(task, CF_SLEEP_MAIL, (vm_offset_t)sleepMail, 4) == 0,
+              @"Cannot enable Power Manager sleep bridge");
     CFWriteState('B');
     CFFront front = CFFrontProcess(pid);
     guest = front.kind == CFGuestFront ? front.psn : 0;
@@ -609,6 +622,31 @@ static void releaseRegion(void *p) {
     while (!CFInterrupted && CFTaskAlive(task, pid)) {
         NSAutoreleasePool *iteration = [[NSAutoreleasePool alloc] init];
         @try {
+            [power drain];
+            CFReadMemory(task, CF_SLEEP_MAIL, sleepMail, sizeof(sleepMail));
+            if (sleepMail[1] != sleepMail[2]) {
+                CFFront current = CFFrontProcess(pid);
+                if (current.kind == CFGuestFront)
+                    guest = current.psn;
+                /* Keep the current desktop/application in place, just as for
+                 * lid sleep. Classic's own scheduler handles host suspend and
+                 * resume; do not run a framebuffer or activation handoff. */
+                IOReturn result = [power sleepWithTask:task pid:pid];
+                CFSLog(@"Power: sleep request completed (%08x)", (unsigned)result);
+                if (CFInterrupted || !CFTaskAlive(task, pid)) {
+                    [iteration release];
+                    break;
+                }
+                /* Complete only after wake callbacks. Repeated API requests
+                 * during a pending request cannot put the Mac back to sleep. */
+                uint32_t completion[2] = {sleepMail[1], result};
+                CFRequire(vm_write(task, CF_SLEEP_MAIL + 8, (vm_offset_t)completion,
+                                   sizeof(completion)) == 0, @"Cannot complete Finder sleep request");
+                if (result != kIOReturnSuccess)
+                    SysBeep(1);
+                automaticAfter = CFMonotonicTime() + 0.5;
+                nextGL = 0;
+            }
             @try {
                 UInt32 target = 0;
                 BOOL finder = NO;
@@ -716,6 +754,9 @@ static void releaseRegion(void *p) {
     signal(SIGTERM, SIG_IGN);
     signal(SIGINT, SIG_IGN);
     if (task && CFTaskAlive(task, pid)) {
+        [power removeBridge];
+        uint32_t disabled = 0;
+        vm_write(task, CF_SLEEP_MAIL, (vm_offset_t)&disabled, sizeof(disabled));
         @try {
             if (away || [hidden count] || [self guestAway])
                 [self returnClassic:guest];

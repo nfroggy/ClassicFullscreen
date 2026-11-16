@@ -39,6 +39,12 @@ static void run(NSString *tool, NSString *manifest, NSString *objects,
     requireTest(([task terminationStatus] == 0) == success, @"Unexpected PatchPack exit status");
 }
 static void verifyGenerated(NSString *output, NSDictionary *expected) {
+    NSDictionary *sleep = [NSDictionary dictionaryWithContentsOfFile:
+        [output stringByAppendingPathComponent:@"Sleep.plist"]];
+    NSData *runtime = readData([output stringByAppendingPathComponent:@"Sleep.bin"]);
+    requireTest([runtime length] == 0x180 &&
+          [digest(runtime) isEqual:[sleep objectForKey:@"payloadMD5"]],
+          @"Runtime sleep payload fingerprint differs");
     NSArray *specs = [NSArray arrayWithContentsOfFile:
         [output stringByAppendingPathComponent:@"Manifest.plist"]];
     requireTest([specs count] == 5, @"Generated manifest missing");
@@ -139,6 +145,17 @@ int main(int argc, char **argv) {
     changeExpected(expected, @"Host", 4355); changeExpected(expected, @"Indexed", 712523);
     changeExpected(expected, @"Guest", 712523);
 
+    NSString *sleepObject = [objects stringByAppendingPathComponent:@"Sleep.o"];
+    NSData *sleepOriginal = readData(sleepObject);
+    NSString *sleepBefore = digest(readData([output stringByAppendingPathComponent:@"Sleep.bin"]));
+    changeObject(sleepObject, 3);
+    run(tool, manifest, objects, output, baselines, YES);
+    verifyGenerated(output, expected);
+    requireTest(![sleepBefore isEqual:digest(readData([output stringByAppendingPathComponent:@"Sleep.bin"]))],
+          @"Runtime assembly edit did not regenerate its payload fingerprint");
+    writeData(sleepOriginal, sleepObject);
+    puts("PASS: runtime assembly hash regenerates without changing on-disk image hashes");
+
     NSString *resourcePath = [baselines stringByAppendingPathComponent:@"Resources.baseline"];
     NSData *alternate = readData([fixtures stringByAppendingPathComponent:@"Resources.alternate"]);
     writeData(alternate, resourcePath);
@@ -165,6 +182,8 @@ int main(int argc, char **argv) {
     [range setObject:[NSNumber numberWithUnsignedInt:239640] forKey:@"offset"];
     [s setObject:[NSArray arrayWithObject:range] forKey:@"segments"];
     [invalid replaceObjectAtIndex:[source indexOfObject:spec(source, @"Indexed")] withObject:s];
+    writeData(readData([[manifest stringByDeletingLastPathComponent] stringByAppendingPathComponent:@"Sleep.plist"]),
+              [temporary stringByAppendingPathComponent:@"Sleep.plist"]);
     NSString *badManifest = [temporary stringByAppendingPathComponent:@"invalid.plist"];
     requireTest([invalid writeToFile:badManifest atomically:YES], @"Cannot write test manifest");
     run(tool, badManifest, objects, output, baselines, NO);

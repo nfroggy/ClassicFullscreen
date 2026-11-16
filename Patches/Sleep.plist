@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>name</key>
+	<string>Sleep</string>
+	<key>length</key>
+	<integer>384</integer>
+	<key>payload</key>
+	<string>Sleep.bin</string>
+	<key>segments</key>
+	<array>
+		<dict>
+			<key>offset</key>
+			<integer>0</integer>
+			<key>length</key>
+			<integer>384</integer>
+			<key>payloadOffset</key>
+			<integer>0</integer>
+		</dict>
+	</array>
+	<key>requestEntry</key>
+	<integer>0</integer>
+	<key>notificationEntry</key>
+	<integer>256</integer>
+</dict>
+</plist>

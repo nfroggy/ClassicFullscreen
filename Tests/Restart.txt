@@ -1,0 +1,54 @@
+Revision 35: remove native background proxies from the application menu
+
+Special -> Restart failed on the mini before a new TruBlueEnvironment could
+start. This was a guest Process Manager crash, not the guardian's restart
+handoff. The same failure occurred with revision 33, before the runtime Sleep
+bridge was added.
+
+Evidence (Tiger 10.4.11, mini G4, System Events running in OS X):
+  Classic PEF FILE offsets below refer to the expanded Classic data fork.
+  ExitToShellInternal -> MenuKill -> AdjustApplicationMenu faulted at FILE
+  0x39f94, lbz r6,0x6e(r5), reading an already disposed native window layer.
+  The offending PEntry was System Events, creator 'sevs', PSN 02680001,
+  mode 01015cc0, layer 07b98db0. Its proxy had already passed through
+  ExitToShellInternal and DeleteAppFromApplicationMenu. The latter skipped
+  removal because modeOnlyBackground (0x400) was set. The next proxy's exit
+  traversed the surviving menu entry and touched its freed layer.
+  These live addresses are diagnostic evidence, never patch constants.
+
+The four-instruction replacement at FILE 0x3a63c lets native proxies
+(mode 0x01000000) use the existing membership search regardless of their
+current background flag. It preserves the original background-only guest
+shortcut. The original search handles absent entries, including the hidden
+real OS X Finder, without deleting another menu item. Unlinking precedes
+menu-service callbacks and preserves external menu indexing and pasteboard
+cleanup. No pointer probing, restart timeout, forced relaunch, or sleep
+behavior changes are used.
+
+Native regression test (PowerPC Tiger / Xcode 2.5):
+  gcc -O2 -Wall -Wextra Tests/MenuCleanupTests.c -o /tmp/MenuCleanupTests
+  /tmp/MenuCleanupTests /private/fixtures/Guest.patched
+
+This executes the patched DeleteAppFromApplicationMenu routine itself with
+isolated lists and mock menu services. 64 cases cover native/guest and
+foreground/background modes, absent entries, head/middle/tail removal,
+pasteboard states, unchanged neighboring links and CFM TOC restoration.
+Reinstating the original instructions reproduces the dangling native entry.
+The independent fixture uses words 74800100 4082000c 70840400 408200e0;
+assembly and complete-image checks must agree with it.
+
+Hardware acceptance:
+  Run Tests/SmokeRestart.sh with an empty Finder session and System Events
+  running in OS X. It restarts twice, verifies replacement host/controller/
+  emergency watcher processes, waits for Classic Startup to exit, switches
+  to OS X and back after each restart, then shuts down normally. Check the
+  new controller also installs its Sleep bridge and all originals restore.
+
+Hardware result, 2026-11-15:
+  Mini G4, Tiger 10.4.11 (8S165), 1920x1080 at 32 bits. No debugger attached.
+  Both restarts passed: host 6946 -> 6991 -> 7069. Each replacement acquired
+  a new controller, emergency watcher and Sleep bridge; Classic Startup
+  finished and the OS X round trip passed. Final normal shutdown succeeded.
+  Host/Finder/Guest/resource fork restored to their original fingerprints.
+  System Events remained running natively (PID 1801); only its guest proxies
+  were cleaned up. No new SystemCrash appeared during these tests.

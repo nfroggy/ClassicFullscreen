@@ -106,6 +106,12 @@ L_native_exit_successor:
 L_normal_exit_successor:
     lwz r3, 0x295c(r2)
     b L_0002f934
+/* Both host-sleep paths have finished their wake notifications here. */
+L_sleep_notifications_done:
+    lis r11, 0x5e0a
+    li r0, 0
+    stw r0, 0x4510(r11)
+    b L_000458bc
 .org 0x2ab68
 L_0002ab68:
 .org 0x2d154
@@ -292,6 +298,19 @@ L_0003a16c:
 .org 0x3a430
     b L_000298a8
 L_0003a434:
+/* A native proxy may become background-only after entering the menu (System
+ * Events does this). DeleteAppFromApplicationMenu must still unlink it before
+ * its layer/partition is freed, or the next AdjustApplicationMenu dereferences
+ * that dead layer during Restart/Shut Down. Preserve the background-only
+ * shortcut for real guest processes; an absent native entry is already safe. */
+.org 0x3a63c
+    andis. r0, r4, 0x100
+    bc 4,2,L_delete_menu_search
+    andi. r4, r4, 0x400
+    bc 4,2,L_delete_menu_done
+L_delete_menu_search:
+.org 0x3a728
+L_delete_menu_done:
 /* Application-menu lookup/checkmark guards. */
 .org 0x3a814
 L_0003a814:
@@ -333,6 +352,12 @@ L_0003d184:
 .org 0x3e420
     li r3, 0x3f2
     nop
+.org 0x458bc
+L_000458bc:
+.org 0x4baa4
+    bl L_sleep_notifications_done
+.org 0x4bc4c
+    bl L_sleep_notifications_done
 .org 0x4cb74
 L_0004cb74:
 .org 0x4d42c

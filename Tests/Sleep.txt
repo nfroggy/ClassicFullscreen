@@ -1,0 +1,107 @@
+Power Manager system-sleep bridge (revision 34)
+
+Finder's Special -> Sleep wrapper is stock again. The controller resolves
+NativePowerMgrLib through low-memory PM globals, the Sleep trap descriptor,
+and its CFM transition vector. It verifies the dispatcher and Sleep function
+before replacing the shared Sleep code pointer; the TOC and SleepQInstall /
+SleepQRemove remain intact. This also covers guest callers of the same API.
+No Mac OS ROM file or guest Power Manager instructions are rewritten.
+
+Patches/Sleep.s supplies two position-independent runtime leaves. PatchPack
+rejects relocations and generates Sleep.bin plus its payload fingerprint in
+Sleep.plist. The controller loads one page into the Classic process, performs
+MATTR_VAL_CACHE_SYNC, makes it read/execute, then publishes aligned pointers.
+The second leaf replaces the BALForceSleep host service table pointer while
+preserving its original query/acknowledge semantics. Its two callers in
+Classic's clkint deliver the guest's sleepNow/sleepWakeUp notifications.
+
+Mailbox at 0x5e0a4500 (32 bytes, unused host DATA tail):
+  +00 ClSl magic (enabled last; cleared first on cleanup)
+  +04 guest request sequence
+  +08 completed sequence
+  +0c native IOReturn
+  +10 guest sleep/wake notification cycle active
+  +14 host notification generation
+  +18 generation captured with the guest request
+  +1c reserved
+
+The request leaf coalesces pending requests, atomically advances the request
+counter, and ignores requests made during host sleep or guest notifications.
+BALForceSleep marks notification ownership before calling any guest sleep
+handler, and advances its generation once per cycle. Two tiny clkint patches
+clear ownership only after sleepWakeUp handlers finish. This protects against
+recursive requests from a handler even when the controller has already
+received SystemHasPoweredOn. The original BlueBoxGetExternalProcesses call
+still runs at both completion sites.
+
+The controller requests IOPMSleepSystem without an application/display
+handoff. Classic stays visible and uses its stock host suspend/resume path,
+as with lid sleep. An independently initiated host sleep that overtakes a
+queued guest request satisfies that request; it must not cause a second
+sleep on wake. Notification handling never calls a guest function or waits
+before IOAllowPowerChange. After waking, completion waits for the guest
+notification guard to clear, with a fresh bounded timeout. A rejected or
+canceled request logs its result and beeps without shutting Classic down.
+
+Cleanup disables new requests and restores both live entry pointers when
+Classic still exists. A published code page is retained until process exit
+because another thread could still be returning from it. Guest restart gets
+a fresh process, controller, mailbox and bridge. The normal transaction
+restores on-disk Host/Finder/Guest/Resources originals at shutdown.
+
+Native tests (PowerPC Tiger / Xcode 2.5):
+  gcc -O2 -Wall -Wextra Tests/SleepBridgeTests.c -o /tmp/SleepBridgeTests
+  /tmp/SleepBridgeTests build/Release/ClassicFullscreen.app/Contents/Resources/Patches/Sleep.bin
+  gcc -O2 -Wall -Wextra -fobjc-exceptions -ISources Tests/PowerTests.m Sources/Power.m -framework Foundation -framework Carbon -o /tmp/PowerTests
+  /tmp/PowerTests
+
+The first executes the exact assembled request and BAL leaves in isolated
+native pages: 216 cases cover disabled/pending requests, host and guest
+notification guards, original query semantics, sequence/generation wrapping,
+cache synchronization and writes outside permitted fields. The second uses
+fake IOKit with a real CFRunLoop and never requests actual hardware sleep:
+11 cases cover successful wake, failed/unavailable requests, cancellation,
+missing notifications, interruption/guest exit, notification registration
+failure, overtaking host sleep and delayed guest wake handlers.
+
+Also run --self-test and Tests/check-assembly.sh against private fixtures.
+The revision 34 Finder fixture restores the original 60-byte Sleep wrapper;
+the Guest fixture independently encodes the 16-byte wake-completion leaf and
+two branch sites. Both match the assembled payload transformations.
+
+Hardware acceptance: empty Finder Sleep/wake at Millions, Thousands and
+256 colors; immediate Classic display, menus, dragging and pointer. At 256
+colors inspect SimTower's tool/map palette and Control Strip. Confirm one
+request produces one host sleep/wake, generation advances once, notification
+ownership clears, and no application switching is logged. Check a native
+OS X sleep, Classic restart/reinstalled bridge, OS X switching and normal
+shutdown/restoration. Do not attach a debugger for sleep acceptance.
+
+Initial hardware result, 2026-11-15:
+  Mini G4, Tiger 10.4.11 (8S165), 1920x1080 at 32 bits, Classic PID 5425.
+  Live Sleep vector 0x5b488 -> 0x40580000; BALForceSleep -> 0x40580100.
+  Finder's original API call produced request=1/completion=1/result=0, one
+  host generation, and notification ownership returned to zero. Kernel logs
+  show System Sleep/System Wake. No showOSX/returnClassic handoff was logged.
+  User confirmed immediate Classic display, menus, dragging and pointer.
+
+  Thousands (16-bit) and SimTower/256-color (8-bit) also passed. The user
+  confirmed immediate Classic display, correct graphics/palettes and input,
+  then shut down normally. All three request completions returned success;
+  Host/Finder/Guest/Resources were restored to their original fingerprints.
+
+Restart qualification:
+  The automated restart check did not pass on the current mini setup: Finder
+  accepted the Restart AppleEvent, but Classic exited without a replacement.
+  Repeating after Classic Startup finished gave the same result. A controlled
+  comparison with the backed-up revision 33 app (old Finder-only sleep patch,
+  no new runtime bridge or wake-completion edits) also reproduced it. Both
+  restored the original files. SystemCrash(9) messages exist in older session
+  logs too; they do not establish a revision 34 regression. No restart fix is
+  included here, and successful restart/reinstallation is not claimed.
+
+Revision 35 follow-up: the restart failure above is fixed by correcting
+Process Manager cleanup of native proxies that became background-only.
+Two hardware restarts installed a fresh Sleep bridge and passed OS X switching
+and normal shutdown. See Tests/Restart.txt for the fault and validation.
+The runtime Sleep payload and wake-notification patches are unchanged.
