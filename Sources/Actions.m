@@ -4,6 +4,25 @@ static BOOL samePSN(ProcessSerialNumber a, ProcessSerialNumber b) {
     Boolean same = false;
     return !SameProcess(&a, &b, &same) && same;
 }
+/* Wake Tiger's idle-suspended guest without an activation event. Activation
+ * must wait until the controller has restored the private drawing buffer.
+ * The no-op need not be implemented by the destination application: delivery
+ * through Classic's Apple-event bridge wakes its scheduler. No reply or user
+ * interaction is requested, and kAECanSwitchLayer is deliberately absent. */
+static int wakeGuest(ProcessSerialNumber p) {
+    AEAddressDesc address = {typeNull, NULL};
+    AppleEvent event = {typeNull, NULL};
+    OSStatus err = AECreateDesc(typeProcessSerialNumber, &p, sizeof(p), &address);
+    if (!err)
+        err = AECreateAppleEvent('misc', 'noop', &address, kAutoGenerateReturnID,
+                                kAnyTransactionID, &event);
+    if (!err)
+        err = AESendMessage(&event, NULL, kAENoReply | kAENeverInteract, 60);
+    AEDisposeDesc(&event);
+    AEDisposeDesc(&address);
+    CFSLog(@"Classic idle wake request for %08lx: %ld", p.lowLongOfPSN, (long)err);
+    return err != noErr;
+}
 static int activate(ProcessSerialNumber p) {
     ProcessSerialNumber front = {0, 0};
     if (!GetFrontProcess(&front) && samePSN(p, front))
@@ -178,6 +197,7 @@ int CFActions(NSArray *args) {
                         target = {0, 0};
     UInt32 requested = 0;
     BOOL listing = [op isEqual:@"list"];
+    BOOL waking = [op isEqual:@"wake"];
     BOOL nativeOperation = [op isEqual:@"native"] || [op isEqual:@"finder-osx"];
     if ([args count] > 1) {
         const char *t = [[args objectAtIndex:1] UTF8String];
@@ -185,16 +205,19 @@ int CFActions(NSArray *args) {
         requested = strtoul(t, &end, 16);
         CFRequire(requested && !*end && strlen(t) <= 8, @"Invalid process serial number");
     }
-    if (requested && [op isEqual:@"return"]) {
+    if (requested && (waking || [op isEqual:@"return"])) {
         /* A Dock selection already provides a registered guest PSN. Validate
          * that record without requesting any guest names, files or Finder
          * metadata while the guest is servicing its resume event. */
         ProcessSerialNumber selected = {0, requested};
         ProcessInfoRec info;
         pid_t pid = 0;
-        CFSLog(@"Return requested for %08lx", (unsigned long)requested);
+        if (!waking)
+            CFSLog(@"Return requested for %08lx", (unsigned long)requested);
         if (GetProcessPID(&selected, &pid) == procNotFound && pid <= 0 &&
             infoFor(selected, &info, NULL, NULL) && !(info.processMode & modeOnlyBackground)) {
+            if (waking)
+                return wakeGuest(selected);
             if (CPSSetProcessToBringForwardAtNextApplicationExit(0, 0))
                 return 1;
             if (!activate(selected)) {
@@ -219,6 +242,10 @@ int CFActions(NSArray *args) {
                      listing ? &name : NULL))
             continue;
         if (guest && info.processType == 'FNDR' && info.processSignature == 'MACS') {
+            /* A stale saved PSN can fall back to the registered OS 9 Finder.
+             * Asking the sleeping guest for its file/name would itself block. */
+            if (waking)
+                return wakeGuest(p);
             if (!path && !infoFor(p, &info, &path, NULL))
                 continue;
             if ([path isEqual:CFFinderPath()])
@@ -246,6 +273,8 @@ int CFActions(NSArray *args) {
     }
     if ([op isEqual:@"list"])
         return 0;
+    if (waking)
+        return 1;
     if ([op isEqual:@"native"] || [op isEqual:@"finder-osx"]) {
         if (!target.lowLongOfPSN)
             target = nativeFinder;

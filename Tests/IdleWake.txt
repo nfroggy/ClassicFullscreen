@@ -1,0 +1,58 @@
+Revision 37: return from Classic's idle sleep
+
+Failure on iBook G4, Tiger 10.4.11:
+  While OS X was visible, Classic idled to sleep. Activating the native
+  ClassicFullscreen Dock proxy did not send anything to an OS 9 process.
+  The controller restored window order and posted display request 4, but the
+  sleeping guest never serviced it. The host mailbox could acknowledge the
+  request even though the guest had not performed it. After ten seconds the
+  controller exited; the guardian then requested normal Classic shutdown.
+
+Classic 1.9 host evidence (original MD5 65ddf692585f939b174c7df0f1251e86):
+  5e011534 reads IntervalUntilSleep; default 5 minutes, value 1 means Never.
+  5e0837bc is BAL's mode; 0x40 is idle, 0x80 is sleeping.
+  5e0837c0 is the 64-bit idle deadline; 5e0837c8 is the configured interval.
+  5e01186c enters the scheduler wait, publishes AppleClassicSleeping, and sets
+  5e0837b4. On wake it clears that flag, publishes AppleClassicWaking and resets
+  the deadline. This is separate from whole-computer IOKit sleep.
+
+Controller return now checks the idle state before changing exit policy,
+window ordering or framebuffer state. A user-account action delivers a
+misc/noop Apple event to the saved guest PSN, or the registered OS 9 Finder if
+that PSN has disappeared. No reply, interaction or layer switch is requested.
+Process validation uses server-held fields, never sleeping-guest name/path
+queries. Delivery wakes the scheduler even if the app has no noop handler.
+The controller waits for BAL's sleep mode and sleeping flag to clear before
+the existing handoff/activation sequence. A failed wake leaves the session
+alive in OS X and permits another Dock attempt.
+
+No assembled patch, guest executable, idle preference or system-sleep bridge
+changes are required. Normal awake returns do not send an extra Apple event.
+
+Hardware regression:
+  Build Tests/IdleWakeProbe.c with gcc -framework Carbon, then run:
+    sh Tests/SmokeIdleWake.sh /absolute/path/to/app/executable /path/to/probe
+  Classic must be stopped, and the test must contain no user applications.
+  The probe expires only the idle deadline; it does not fabricate the sleep
+  flag, suspend the guest or change the idle preference. Tiger performs its
+  actual sleep transition. Three proxy returns must retain the same host PID,
+  finish the graphics transaction, and survive beyond the old timeout.
+  Add a third argument, failure, to temporarily SIGSTOP that empty host and
+  verify that an unacknowledged wake stays in OS X without shutting down. The
+  script resumes the host, retries, and finally checks normal shutdown.
+
+Hardware results, iBook G4 / Tiger 10.4.11 8S165 / Xcode 2.5, 2026-11-16:
+  Three sleep/proxy-return cycles each at 8, 16 and 32 bits passed, retaining
+  the original PID, clearing the graphics request and restoring all original
+  host/Finder/guest/resource fingerprints on shutdown. Three additional
+  32-bit cycles passed before the delayed-wake test. With the empty sleeping
+  host stopped, return left state A, away=1, pending=0, request=0 and retained
+  the supervisor/controller; after SIGCONT a new proxy activation returned
+  normally in the same PID. On Tiger SIGCONT needed sudo; the test script's
+  stop/resume and cleanup trap now use it. All packaged assembly payloads
+  and generated manifests are byte-for-byte identical to revision 36.
+
+Manual check: leave Classic idle while using OS X. Once the Classic preference
+pane says it is sleeping, click ClassicFullscreen in the Dock. Finder should
+return with responsive menus and dragging. Repeat, and also check a specific
+Classic application's Dock icon and Special -> Shut Down.

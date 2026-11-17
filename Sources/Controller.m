@@ -35,6 +35,7 @@ typedef struct {
 - (void)order:(unsigned)window how:(unsigned)how;
 - (void)waitIdle:(uint32_t *)mail;
 - (void)returnClassic:(UInt32)front;
+- (BOOL)wakeGuest:(UInt32)front;
 - (void)showOSX:(UInt32)front finder:(BOOL)finder;
 - (void)updateGL:(CFFront)front;
 - (void)refreshNativeExit;
@@ -278,7 +279,31 @@ static void releaseRegion(void *p) {
     if (status)
         CFFail(@"Activation failed: %@ (helper status %d)", action, status);
 }
+- (BOOL)wakeGuest:(UInt32)front {
+    /* Classic 1.9's BAL idle mode, not IOKit system sleep. The host event
+     * thread continues servicing our mailbox in mode 0x80, but the guest
+     * cannot consume its display request until an ordinary event wakes it.
+     * A native proxy Dock click does not deliver such an event to the guest. */
+    if (CFWord(task, 0x5e0837bc) != 0x80)
+        return YES;
+    NSArray *args = front ? [NSArray arrayWithObjects:@"wake", psnString(front), nil]
+                          : [NSArray arrayWithObject:@"wake"];
+    int status = CFUserAction(args, 3), i;
+    for (i = 0; !status && i < 100; i++) {
+        if (CFWord(task, 0x5e0837bc) != 0x80 && !CFWord(task, 0x5e0837b4)) {
+            CFSLog(@"Classic idle wake completed before display handoff");
+            return YES;
+        }
+        usleep(20000);
+    }
+    CFSLog(@"Classic idle wake incomplete (%d); leaving the session running in OS X", status);
+    return NO;
+}
 - (void)returnClassic:(UInt32)front {
+    if (![self wakeGuest:front])
+        @throw [NSException exceptionWithName:@"ClassicStillSleeping"
+                                       reason:@"Classic has not finished waking"
+                                     userInfo:nil];
     [self user:@"clear-exit" target:0];
     memset(&nativeExitTarget, 0, sizeof(nativeExitTarget));
     CFWriteState('B');
@@ -723,6 +748,14 @@ static void releaseRegion(void *p) {
                     }
                 }
             } @catch (NSException *e) {
+                if ([[e name] isEqual:@"ClassicStillSleeping"] && away) {
+                    /* No graphics request or window reveal has occurred.
+                     * Keep the guest and helpers alive so the user can retry. */
+                    CFWriteState('A');
+                    [self user:@"native" target:native];
+                    automaticAfter = CFMonotonicTime() + 1;
+                    continue;
+                }
                 if (![[e name] isEqual:@"ClassicReturnInProgress"])
                     @throw;
                 UInt32 target;
