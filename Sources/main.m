@@ -1,4 +1,5 @@
 #import "CFClassic.h"
+#include <errno.h>
 #include <fcntl.h>
 #include <mach-o/dyld.h>
 #include <sys/stat.h>
@@ -27,6 +28,18 @@ int main(int argc, char **argv) {
                       realpath(executable, resolved) != NULL,
                   @"Cannot resolve application path");
         CFExecutable = [[NSString stringWithUTF8String:resolved] copy];
+        /* Tiger records the spelling passed to exec in KERN_PROCARGS. The
+         * guardian checks that path against CFExecutable, so normalize the
+         * actual process too, before registering a UI or requesting privilege.
+         * Re-exec preserves the PID, arguments and working directory; resolving
+         * another process's relative path in the guardian would not be safe. */
+        NSString *processPath = CFProcessPath(getpid());
+        CFRequire(processPath != nil, @"Cannot inspect application process path");
+        if (![processPath isEqual:CFExecutable]) {
+            argv[0] = resolved;
+            execv(resolved, argv);
+            CFFail(@"Cannot restart application at its resolved path: %s", strerror(errno));
+        }
         CFResources = [[[[CFExecutable stringByDeletingLastPathComponent]
             stringByDeletingLastPathComponent] stringByAppendingPathComponent:@"Resources"] copy];
         if (geteuid() == 0)

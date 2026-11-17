@@ -1,0 +1,44 @@
+Revision 38: relative-path recovery
+
+Tiger's KERN_PROCARGS retains the executable path passed to exec, including
+relative components. main already resolved its own path for resources and
+privileged helpers. A UI started as ./ClassicFullscreen.app/... therefore
+disagreed with the absolute path used by its guardian. Recovery refused it
+with "Unexpected native UI process or account", before touching system files.
+
+main now re-executes itself at the resolved absolute path if necessary, before
+UI registration, authorization or session work. execv retains the PID, working
+directory, environment and arguments. The guardian's exact path and account
+checks remain intact. It never interprets a foreign process's relative path
+against its own working directory. This also covers symlink and dotted paths
+for ordinary startup. Invocations already using the canonical path do not
+re-execute. Run --recover as the desktop account, without sudo.
+
+Hardware regression on Tiger:
+  gcc -Wall -Wextra Tests/LaunchPathProbe.c -o /tmp/LaunchPathProbe
+  sh Tests/SmokeLaunchPaths.sh /absolute/app/Contents/MacOS/ClassicFullscreen \
+      /tmp/LaunchPathProbe
+Run with Classic stopped and no fullscreen session active. The script starts
+only UI helpers, checks their kernel paths and accounts, and terminates them.
+It exercises absolute, bare relative (App.app/Contents/MacOS/App), ./ relative,
+dotted, absolute-symlink and relative-symlink paths (including spaces). It
+checks the actual KERN_PROCARGS path, not just dyld's executable path.
+No protected files or preferences are changed.
+
+Then run the actual app with a relative path and --recover, approve Tiger's
+authorization dialog, and check the session log for "Native UI ready before
+fullscreen" followed by RESTORED, with stock file fingerprints and no remaining
+session channels. Repeat normal launch/shutdown if startup code changes again.
+
+Results, iBook G4 / Tiger 10.4.11 8S165 / Xcode 2.5, 2026-11-16:
+  Reproduced the relative KERN_PROCARGS path under the original executable.
+  Comparing only dyld's path was insufficient for the bare relative command;
+  that candidate still failed the user's actual Terminal recovery attempt.
+  The final kernel-path comparison passes all six cases in both the build
+  directory and /Applications. PID and desktop UID remain unchanged.
+  Actual Terminal command from /Applications:
+    ClassicFullscreen.app/Contents/MacOS/ClassicFullscreen --recover
+  After administrator authorization, the guardian accepted the UI, completed
+  recovery, verified stock Host/Finder/Guest/Resources and removed its session
+  channels. All four files were already stock; this check did not need to
+  repair any patched bytes. The assembly payloads/manifests are unchanged.
