@@ -10,10 +10,12 @@ static struct stat metadata(NSString *path) {
               [NSString stringWithFormat:@"Expected a regular, single-link file: %@", path]);
     return s;
 }
-static BOOL same(struct stat a, struct stat b) {
+static BOOL sameIdentity(struct stat a, struct stat b) {
     return a.st_dev == b.st_dev && a.st_ino == b.st_ino && a.st_mode == b.st_mode &&
-           a.st_uid == b.st_uid && a.st_gid == b.st_gid && a.st_nlink == b.st_nlink &&
-           a.st_size == b.st_size;
+           a.st_uid == b.st_uid && a.st_gid == b.st_gid && a.st_nlink == b.st_nlink;
+}
+static BOOL same(struct stat a, struct stat b) {
+    return sameIdentity(a, b) && a.st_size == b.st_size;
 }
 static BOOL entry(NSString *p) {
     struct stat s;
@@ -85,6 +87,14 @@ static void newBackup(NSString *path, NSData *data, struct stat s) {
     CFRequire([CFReadFile(path) isEqual:data], @"Backup verification failed");
 }
 int CFPatchFaultAfterWrites = -1; /* Used only by --self-test on disposable files. */
+static void writeFault(void) {
+    if (CFPatchFaultAfterWrites == 0) {
+        CFPatchFaultAfterWrites = -1;
+        CFFail(@"Injected write failure");
+    }
+    if (CFPatchFaultAfterWrites > 0)
+        CFPatchFaultAfterWrites--;
+}
 static void writeRanges(int fd, NSData *data, NSArray *ranges) {
     unsigned i;
     for (i = 0; i < [ranges count]; i++) {
@@ -93,14 +103,44 @@ static void writeRanges(int fd, NSData *data, NSArray *ranges) {
                  n = [[r objectForKey:@"length"] unsignedIntValue];
         CFRequire(lseek(fd, a, SEEK_SET) == a, @"Patch seek failed");
         CFWriteAll(fd, (const char *)[data bytes] + a, n);
-        if (CFPatchFaultAfterWrites == 0) {
-            CFPatchFaultAfterWrites = -1;
-            CFFail(@"Injected write failure");
-        }
-        if (CFPatchFaultAfterWrites > 0)
-            CFPatchFaultAfterWrites--;
+        writeFault();
     }
     CFRequire(fsync(fd) == 0, @"Patch sync failed");
+}
+static NSData *recoveryBackup(NSString *path, NSDictionary *s) {
+    struct stat before = metadata(path), opened;
+    CFRequire(before.st_size == [[s objectForKey:@"length"] unsignedIntValue],
+              @"Invalid original backup length");
+    int fd = open([path fileSystemRepresentation], O_RDONLY | O_NOFOLLOW);
+    CFRequire(fd >= 0, @"Cannot open original backup");
+    NSMutableData *data = [NSMutableData dataWithLength:(unsigned)before.st_size];
+    @try {
+        CFRequire(fstat(fd, &opened) == 0 && same(before, opened), @"Original backup changed");
+        size_t offset = 0;
+        while (offset < [data length]) {
+            ssize_t n = read(fd, (char *)[data mutableBytes] + offset, [data length] - offset);
+            if (n < 0 && errno == EINTR) continue;
+            CFRequire(n > 0, @"Cannot read original backup");
+            offset += n;
+        }
+        CFRequire(fstat(fd, &opened) == 0 && same(before, opened) &&
+                      [imageDigest(data, s) isEqual:expectedDigest(s, NO)],
+                  @"Invalid original backup");
+    } @finally {
+        close(fd);
+    }
+    return data;
+}
+static void writeRecovery(int fd, NSData *data) {
+    CFRequire(lseek(fd, 0, SEEK_SET) == 0, @"Recovery seek failed");
+    unsigned offset = 0;
+    while (offset < [data length]) {
+        unsigned n = MIN(65536U, [data length] - offset);
+        CFWriteAll(fd, (const char *)[data bytes] + offset, n);
+        writeFault();
+        offset += n;
+    }
+    CFRequire(ftruncate(fd, [data length]) == 0 && fsync(fd) == 0, @"Recovery sync failed");
 }
 @implementation CFPatches
 - (id)initWithRoot:(NSString *)prefix {
@@ -220,7 +260,7 @@ static void writeRanges(int fd, NSData *data, NSArray *ranges) {
               @"Patched image verification failed");
     return result;
 }
-- (void)verifyBaseline {
+- (void)verifyRecovery {
     unsigned i;
     for (i = 0; i < 4; i++) {
         NSDictionary *s = [specs objectAtIndex:i];
@@ -230,13 +270,114 @@ static void writeRanges(int fd, NSData *data, NSArray *ranges) {
                              ? [path stringByAppendingString:@"/..namedfork/rsrc"]
                              : path;
         NSData *d = CFReadFile(fork);
-        [self transform:d spec:s];
+        CFRequire([d length] == [[s objectForKey:@"length"] unsignedIntValue] &&
+                      [imageDigest(d, s) isEqual:expectedDigest(s, NO)],
+                  [@"File is not stock: " stringByAppendingString:path]);
         NSString *backup = [path stringByAppendingString:[s objectForKey:@"backup"]];
         if (entry(backup)) {
             metadata(backup);
             CFRequire(sameImage(CFReadFile(backup), d, s), @"Existing backup does not match baseline");
         }
     }
+}
+- (void)verifyBaseline {
+    [self verifyRecovery];
+    unsigned i;
+    for (i = 0; i < 4; i++) {
+        NSDictionary *s = [specs objectAtIndex:i];
+        NSString *path = [self pathFor:s];
+        if ([[s objectForKey:@"resource"] boolValue])
+            path = [path stringByAppendingString:@"/..namedfork/rsrc"];
+        [self transform:CFReadFile(path) spec:s];
+    }
+}
+- (NSArray *)recoveryPlan {
+    /* Read-only: validate every required backup before restoring any component.
+     * Stock files need no backup on a first launch. Existing backups must still
+     * be valid, even when their destination happens to be stock. */
+    NSMutableArray *names = [NSMutableArray array];
+    unsigned i;
+    for (i = 0; i < 4; i++) {
+        NSDictionary *s = [specs objectAtIndex:i];
+        NSString *path = [self pathFor:s];
+        metadata(path);
+        NSString *fork = [[s objectForKey:@"resource"] boolValue]
+            ? [path stringByAppendingString:@"/..namedfork/rsrc"] : path;
+        NSData *current = CFReadFile(fork);
+        BOOL stock = NO;
+        if ([current length] == [[s objectForKey:@"length"] unsignedIntValue]) {
+            @try { stock = [imageDigest(current, s) isEqual:expectedDigest(s, NO)]; }
+            @catch (NSException *e) {
+                /* A damaged resource-map header is recoverable too. This
+                 * catches only content inspection, never filesystem checks. */
+                (void)e;
+            }
+        }
+        NSString *backup = [path stringByAppendingString:[s objectForKey:@"backup"]];
+        if (!stock || entry(backup))
+            recoveryBackup(backup, s);
+        if (!stock)
+            [names addObject:[s objectForKey:@"name"]];
+    }
+    return names;
+}
+- (void)recover:(NSString *)name {
+    if (![root length])
+        CFRequire([CFClassicPIDs() count] == 0, @"Classic must be stopped before recovery");
+    NSDictionary *s = [self spec:name];
+    NSString *path = [self pathFor:s],
+             *backup = [path stringByAppendingString:[s objectForKey:@"backup"]];
+    /* Only the backup's stock identity authorizes recovery. Do not inspect the
+     * destination's contents, patched hash, resource header or patch ranges.
+     * Old releases and interrupted writes can differ at any byte or length. */
+    NSData *original = recoveryBackup(backup, s);
+    struct stat before = metadata(path);
+    BOOL resource = [[s objectForKey:@"resource"] boolValue];
+    NSString *fork = resource ? [path stringByAppendingString:@"/..namedfork/rsrc"] : path;
+    if ([[s objectForKey:@"atomic"] boolValue]) {
+        NSString *pattern = [[path stringByDeletingLastPathComponent]
+            stringByAppendingPathComponent:@".classic-recover-XXXXXX"];
+        char *tmp = strdup([pattern fileSystemRepresentation]);
+        CFRequire(tmp != NULL, @"Cannot allocate recovery path");
+        int fd = mkstemp(tmp);
+        @try {
+            CFRequire(fd >= 0, @"Cannot create recovered host image");
+            writeRecovery(fd, original);
+            CFRequire(fchown(fd, before.st_uid, before.st_gid) == 0 &&
+                          fchmod(fd, before.st_mode & 07777) == 0 && fsync(fd) == 0,
+                      @"Cannot preserve recovered host permissions");
+            close(fd);
+            fd = -1;
+            CFRequire([CFReadFile([NSString stringWithUTF8String:tmp]) isEqual:original] &&
+                          same(before, metadata(path)), @"Recovery target changed");
+            if (![root length])
+                CFRequire([CFClassicPIDs() count] == 0, @"Classic started during recovery");
+            CFRequire(rename(tmp, [path fileSystemRepresentation]) == 0,
+                      @"Cannot commit recovered host image");
+        } @finally {
+            if (fd >= 0) close(fd);
+            unlink(tmp);
+            free(tmp);
+        }
+    } else {
+        /* Preserve the HFS file ID, Finder metadata and the other fork. A
+         * failed write leaves the verified backup intact for a full retry. */
+        int fd = open([fork fileSystemRepresentation], O_WRONLY | O_NOFOLLOW);
+        CFRequire(fd >= 0, @"Cannot open recovery target fork");
+        @try {
+            struct stat opened;
+            CFRequire(fstat(fd, &opened) == 0 && sameIdentity(before, opened) &&
+                          same(before, metadata(path)), @"Recovery target changed");
+            if (![root length])
+                CFRequire([CFClassicPIDs() count] == 0, @"Classic started during recovery");
+            writeRecovery(fd, original);
+            CFRequire(sameIdentity(before, metadata(path)), @"Recovery changed file identity");
+        } @finally {
+            close(fd);
+        }
+    }
+    CFRequire([CFReadFile(fork) isEqual:original], @"Recovery verification failed");
+    CFSLog(@"%@: recovered from verified original backup (%@)", name, CFDigest(original));
 }
 - (void)install:(NSString *)name enabled:(BOOL)enabled {
     if (![root length])

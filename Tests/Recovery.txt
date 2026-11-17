@@ -1,0 +1,93 @@
+Revisions 39-40: recovery across patch releases
+
+Revision 40 automatically recovers before launching. With Classic stopped and
+the session lock held, startup scans the four installed forks for the stock
+identity. Any non-stock fork (including current patches) needs a verified
+original backup. All required and existing backups are validated before any
+file is restored. Stock files with no backup are allowed on a first launch;
+stock components are not rewritten. Failed planning leaves every file alone.
+
+An interrupted session.configuration no longer blocks startup. Its original
+account and System Folder identity are still required. Recovery first repairs
+that folder and clears stale fullscreen preferences, then removes the journal.
+If the selected System Folder has changed, startup prepares that folder next.
+A recovery without an old journal saves one before writing, so an interruption
+can be retried. Failed recovery retains the journal; launch does not proceed.
+After recovery, the full existing preflight (including patch payloads,
+CoreGraphics, preferences and display state) must pass before installing the
+new patches and starting Classic. --check-only remains read-only.
+
+--recover now restores from verified original backups without recognizing the
+destination's contents. It accepts old patch sets, incomplete patch writes,
+damaged resource headers, and shorter/longer destination forks. Each backup
+must be an existing regular single-link file with the supported stock length
+and fingerprint. A missing, corrupt or unsupported backup refuses that target
+without writing it. No replacement backup is created from the current file.
+
+Run as the desktop account that started the session, with Classic stopped:
+  /Applications/ClassicFullscreen.app/Contents/MacOS/ClassicFullscreen --recover
+Approve Tiger's administrator dialog. The saved account/System Folder checks,
+exclusive session lock, stopped-Classic checks and destination link checks
+remain in force. The current destination must exist as a regular single-link
+file; this is not a general filesystem repair tool.
+
+Recovery replaces the host atomically. Finder and the Classic guest are
+restored by writing the COMPLETE data/resource fork in place, then truncating
+to the backup length and syncing. This preserves their HFS IDs, permissions,
+Finder metadata and other forks while removing edits outside the current
+release's patch ranges. Resource recovery restores the backup's six map
+bookkeeping bytes too; it does not try to parse the damaged current resource
+map. All restored bytes are checked against the backup after writing.
+
+The original backups are read-only throughout. If an in-place write fails or
+power is interrupted again, retry --recover using the same backup. This does
+not make filesystem writes immune to power failure, but recovery no longer
+requires the interrupted destination to have a recognized checksum. Failed
+restoration retains session.configuration and does not log RESTORED.
+
+Patch installation, shutdown restoration and indexed-patch migration retain
+their existing strict current-image checks. Recovery's stock verification
+does not load current .bin payloads or depend on patched-image checksums;
+normal startup still validates those payloads after automatic recovery.
+Backups for a different, unsupported Apple baseline are still refused.
+
+Tests/RecoveryTests.m runs inside --self-test on disposable /tmp files only.
+It needs the usual private fixtures plus Host.previous, Finder.previous,
+Guest.previous and Resources.previous from an earlier patch release. It checks:
+  - actual historical images, interrupted patches and edits outside new ranges;
+  - truncated, empty, extended and malformed resource targets;
+  - full byte-exact restoration and repeated recovery;
+  - ownership/mode, HFS ID, Finder metadata and other-fork preservation;
+  - missing/corrupt/truncated/linked backups and linked destinations;
+  - injected partial-write failures, unchanged backups and successful retries;
+  - recovery and final verification with current patch payloads unavailable;
+  - continued refusal to install new patches over an unrecognized image.
+  - automatic recovery planning for first launches and stock/mixed/old/current files;
+  - no writes when a later required backup is missing or invalid;
+  - current patch installation after recovery and independent payload checks.
+
+Revision 39 validation (2026-11-16): built with Xcode 2.5 on the Tiger iBook. The complete
+native self-test passed, including all four recovery components and the
+existing installer, configuration, CoreGraphics and controller tests. The
+root guardian's recovery command then completed against the iBook's real
+original backups with Classic stopped. All four restored forks matched stock,
+the host retained root:wheel ownership and mode 4755, and the session logged
+RESTORED. No deliberately damaged fixtures were installed as live system files.
+
+Revision 40 native validation (2026-11-16): the complete native self-test passed
+on the Tiger iBook with Xcode 2.5, including the additional automatic-recovery
+cases. The existing installer, configuration, CoreGraphics and controller tests
+also passed. The filesystem damage and older binary tests use disposable files.
+
+Tests/SmokeAutomaticRecovery.sh is a separate visible hardware test:
+  /bin/sh Tests/SmokeAutomaticRecovery.sh /absolute/path/to/app/executable /private/fixtures
+Run as the desktop user with Classic stopped. It stages only a verified current
+Host.patched image, requiring both a stock live host and a valid original backup
+first. It checks startup with and without an interrupted-session record, along
+with stale fullscreen preferences. Each test must reach fullscreen Finder,
+shut down normally and pass the complete stock preflight afterward. It does not
+open guest applications or install deliberately damaged files on the system.
+
+Both hardware cases passed on the iBook (2026-11-16): automatic recovery,
+fullscreen Finder startup, orderly shutdown, removal of the session record,
+and the final stock preflight. Classic was left stopped with stock files.

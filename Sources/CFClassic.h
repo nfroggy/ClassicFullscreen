@@ -91,6 +91,9 @@ void CFVerifyCoreGraphics(NSData *data);
 - (NSArray *)writeSegmentsForSpec:(NSDictionary *)spec;
 - (NSData *)transform:(NSData *)base spec:(NSDictionary *)spec;
 - (void)verifyBaseline;
+- (void)verifyRecovery;
+- (NSArray *)recoveryPlan;
+- (void)recover:(NSString *)name;
 - (void)install:(NSString *)name enabled:(BOOL)enabled;
 @end
 

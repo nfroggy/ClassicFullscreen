@@ -51,10 +51,10 @@ static void cleanupChannels(void) {
 static NSString *configurationPath(void) {
     return [CF_RUN stringByAppendingPathComponent:@"session.configuration"];
 }
-static void configureSession(BOOL recovery, NSString *path) {
+static BOOL configureSession(NSString *path) {
     struct stat file;
+    BOOL interrupted = NO;
     if (lstat([path fileSystemRepresentation], &file) == 0) {
-        CFRequire(recovery, @"An interrupted session needs recovery. Run ClassicFullscreen --recover.");
         CFRequire(S_ISREG(file.st_mode) && file.st_uid == 0 && file.st_nlink == 1 &&
                       (file.st_mode & 0777) == 0600 && file.st_size <= 8192,
                   @"Invalid saved session configuration");
@@ -72,12 +72,14 @@ static void configureSession(BOOL recovery, NSString *path) {
                       (unsigned long long)directory.st_ino == [[saved objectForKey:@"Inode"] unsignedLongLongValue],
                   @"The interrupted session's System Folder is unavailable or has moved.");
         CFSetSystemFolder(folder);
+        interrupted = YES;
     } else {
         CFRequire(errno == ENOENT, @"Cannot inspect saved session configuration");
         CFEnsureSystemFolder();
     }
     CFSLog(@"Session account: %@ (uid %u, gid %u); Classic System Folder: %@",
            CFUserName, (unsigned)CFUserID, (unsigned)CFGroupID, CFSystemFolder);
+    return interrupted;
 }
 static void saveConfiguration(NSString *path) {
     struct stat directory;
@@ -115,15 +117,15 @@ void CFSessionConfigurationTests(NSString *scratch) {
         CFSetSystemFolder(folder);
         saveConfiguration(journal);
         CFSetSystemFolder(other);
-        configureSession(YES, journal);
-        CFRequire([CFSystemFolder isEqual:folder], @"Recovery followed a changed folder selection");
+        CFRequire(configureSession(journal) && [CFSystemFolder isEqual:folder],
+                  @"Recovery followed a changed folder selection");
         BOOL refused = NO;
-        @try { configureSession(NO, journal); }
+        @try { saveConfiguration(journal); }
         @catch (NSException *e) { (void)e; refused = YES; }
         CFRequire(refused, @"New session overwrote interrupted-session configuration");
         CFConfigureUser(getpwnam("daemon")->pw_uid);
         refused = NO;
-        @try { configureSession(YES, journal); }
+        @try { configureSession(journal); }
         @catch (NSException *e) { (void)e; refused = YES; }
         CFConfigureUser(user);
         CFRequire(refused, @"Recovery accepted another user's session");
@@ -132,10 +134,10 @@ void CFSessionConfigurationTests(NSString *scratch) {
                       mkdir([folder fileSystemRepresentation], 0755) == 0,
                   @"Cannot prepare replacement-folder test");
         refused = NO;
-        @try { configureSession(YES, journal); }
+        @try { configureSession(journal); }
         @catch (NSException *e) { (void)e; refused = YES; }
         CFRequire(refused, @"Recovery accepted a replacement directory at the saved path");
-        CFSLog(@"PASS: recovery pins folder identity/account and rejects a second session");
+        CFSLog(@"PASS: recovery pins folder identity/account and preserves the interrupted-session record");
     } @finally {
         CFConfigureUser(user);
         [CFSystemFolder release];
@@ -226,13 +228,41 @@ void CFVerifyCoreGraphics(NSData *data) {
         [canonical release];
     }
 }
+static NSString *selectedSystemFolder(void) {
+    return [[[NSString alloc]
+        initWithData:CFUserOutput([NSArray arrayWithObject:@"system-folder"])
+        encoding:NSUTF8StringEncoding] autorelease];
+}
+static void recoverBeforeLaunch(CFPatches *patches, BOOL interrupted, int emergency) {
+    NSArray *names = [patches recoveryPlan];
+    if (!interrupted && ![names count])
+        return;
+    canceled(emergency);
+    if (!interrupted)
+        saveConfiguration(configurationPath());
+    CFSLog(@"Automatic recovery before launch: %@%@", [names componentsJoinedByString:@", "],
+           interrupted ? @" (interrupted session)" : @"");
+    unsigned i;
+    for (i = 0; i < [names count]; i++) {
+        canceled(emergency);
+        [patches recover:[names objectAtIndex:i]];
+    }
+    [patches verifyRecovery];
+    CFUserAction([NSArray arrayWithObject:@"clear-exit"], 3);
+    CFRequire(CFUserAction([NSArray arrayWithObject:@"preferences-off"], 5) == 0 &&
+                  CFUserAction([NSArray arrayWithObject:@"preferences-check"], 5) == 0,
+              @"Cannot remove interrupted fullscreen preferences");
+    CFRequire(unlink([configurationPath() fileSystemRepresentation]) == 0,
+              @"Cannot remove recovered session configuration");
+    CFSLog(@"Automatic recovery complete; continuing startup checks");
+    /* Failure above leaves the journal and backups intact for another launch
+     * or --recover. Normal install/cleanup has not begun yet. */
+}
 void CFPreflight(void) {
     CFRequire(geteuid() == 0, @"Preflight requires administrator access");
     CFRequireConsoleUser();
     CFEnsureSystemFolder();
-    NSString *selected = [[[NSString alloc]
-        initWithData:CFUserOutput([NSArray arrayWithObject:@"system-folder"])
-        encoding:NSUTF8StringEncoding] autorelease];
+    NSString *selected = selectedSystemFolder();
     CFRequire([selected isEqual:CFSystemFolder],
               @"Classic's selected System Folder changed; please start again.");
     CFRequire([CFClassicPIDs() count] == 0, @"Classic must be stopped");
@@ -453,7 +483,7 @@ int CFGuardian(pid_t ui, BOOL recovery) {
     int request = -1, emergencyFD = -1;
     pid_t controller = 0, emergency = 0, classic = 0, uiChild = 0;
     task_t task = 0;
-    BOOL prefs = NO, attempted = NO, channels = NO, launched = NO;
+    BOOL prefs = NO, attempted = NO, channels = NO, launched = NO, restorationFailed = NO;
     NSString *error = nil;
     CFPatches *patches = nil;
     @try {
@@ -489,12 +519,25 @@ int CFGuardian(pid_t ui, BOOL recovery) {
         }
         CFRequire(ready, @"Native UI did not confirm readiness");
         CFSLog(@"Native UI ready before fullscreen");
-        configureSession(recovery, configurationPath());
+        BOOL interrupted = configureSession(configurationPath());
         patches = [[CFPatches alloc] initWithRoot:@""];
         if (recovery) {
             attempted = YES;
             prefs = YES;
         } else {
+            recoverBeforeLaunch(patches, interrupted, emergencyFD);
+            if (interrupted) {
+                /* Recover the recorded folder first, then honor the user's
+                 * current Classic selection for this new launch. */
+                NSString *selected = selectedSystemFolder();
+                if (![selected isEqual:CFSystemFolder]) {
+                    CFSetSystemFolder(selected);
+                    [patches release];
+                    patches = nil;
+                    patches = [[CFPatches alloc] initWithRoot:@""];
+                    recoverBeforeLaunch(patches, NO, emergencyFD);
+                }
+            }
             CFPreflight();
             canceled(emergencyFD);
             saveConfiguration(configurationPath());
@@ -569,8 +612,12 @@ int CFGuardian(pid_t ui, BOOL recovery) {
             unsigned i;
             for (i = 0; i < [names count]; i++) {
                 @try {
-                    [patches install:[names objectAtIndex:i] enabled:NO];
+                    if (recovery)
+                        [patches recover:[names objectAtIndex:i]];
+                    else
+                        [patches install:[names objectAtIndex:i] enabled:NO];
                 } @catch (NSException *e) {
+                    restorationFailed = YES;
                     if (!error)
                         error = [[e reason] copy];
                     CFSLog(@"Restoration failed: %@", [e reason]);
@@ -578,16 +625,22 @@ int CFGuardian(pid_t ui, BOOL recovery) {
             }
         }
         if (prefs && CFUserAction([NSArray arrayWithObject:@"preferences-off"], 5) != 0) {
+            restorationFailed = YES;
             if (!error)
                 error = [@"Cannot remove fullscreen preferences" copy];
         }
         if (attempted) {
-            [patches verifyBaseline];
-            if (!prefs || CFUserAction([NSArray arrayWithObject:@"preferences-check"], 5) == 0)
+            if (recovery)
+                [patches verifyRecovery];
+            else
+                [patches verifyBaseline];
+            if (!restorationFailed &&
+                (!prefs || CFUserAction([NSArray arrayWithObject:@"preferences-check"], 5) == 0)) {
                 CFRequire(unlink([configurationPath() fileSystemRepresentation]) == 0 || errno == ENOENT,
                           @"Cannot remove restored session configuration");
-            CFSLog(@"RESTORED: original host, Finder, guest/resource baselines; display settings "
-                  @"unchanged");
+                CFSLog(@"RESTORED: original host, Finder, guest/resource baselines; display settings "
+                      @"unchanged");
+            }
         }
     } @catch (NSException *e) {
         if (!error)

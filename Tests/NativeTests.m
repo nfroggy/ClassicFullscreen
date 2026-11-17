@@ -7,6 +7,7 @@
 #include <unistd.h>
 extern void CFControllerPolicyTests(void);
 extern void CFSessionConfigurationTests(NSString *root);
+extern void CFRecoveryTests(CFPatches *patches, NSString *fixtures);
 extern int CFPatchFaultAfterWrites;
 static void parents(NSString *path) {
     NSArray *parts = [[path stringByDeletingLastPathComponent] pathComponents];
@@ -359,6 +360,7 @@ int CFSelfTests(NSString *fixtures) {
         CFSLog(@"PASS: native fork install/restore/idempotence, ownership preservation, rollback, "
               @"corrupt-backup and unknown-image refusal");
         resourceIdentityTests(p, fixtures);
+        CFRecoveryTests(p, fixtures);
         graphicsIdentityTests(fixtures);
         CFControllerPolicyTests();
     } @finally {
