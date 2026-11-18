@@ -1,5 +1,6 @@
-/* Tiger idle-sleep diagnostic. status only reads host state; expire-idle
- * expires the deadline in an EMPTY test session. noop sends an Apple event
+/* Tiger idle-sleep diagnostic. status only reads host state. expire-idle
+ * and expire-foreground expire the deadline in an EMPTY background or
+ * fullscreen test session, respectively. noop sends an Apple event
  * without activating its target. Run as the console user, with sudo for the
  * Mach read/deadline modes. Not part of the application build. */
 #include <Carbon/Carbon.h>
@@ -17,22 +18,23 @@ static unsigned word(unsigned address) {
 }
 int main(int argc, char **argv) {
     if (argc != 3) return 2;
-    if (!strcmp(argv[1], "status") || !strcmp(argv[1], "expire-idle")) {
+    int foreground = !strcmp(argv[1], "expire-foreground");
+    if (!strcmp(argv[1], "status") || !strcmp(argv[1], "expire-idle") || foreground) {
         unsigned ctx;
         if (task_for_pid(mach_task_self(), atoi(argv[2]), &task)) return 2;
         ctx = word(0x5e0a3530);
-        if (!strcmp(argv[1], "expire-idle")) {
+        if (foreground || !strcmp(argv[1], "expire-idle")) {
             /* Empty diagnostic session only. Expire the existing idle deadline;
              * let Tiger's scheduler perform its real sleep transition. */
             unsigned deadline[2] = {0, 0};
-            if (word(0x5e0837bc) != 0x40 || word(ctx+464) != 1 ||
+            if (word(0x5e0837bc) != 0x40 || word(ctx+464) != (foreground ? 0 : 1) ||
                 word(ctx+468) || word(word(ctx+384))) return 2;
             if (vm_write(task, 0x5e0837c0, (vm_offset_t)deadline, sizeof(deadline))) return 2;
         }
-        printf("sleep=%u mode=%x tick=%u away=%u pending=%u request=%u trace=%u mailbox=%u/%u\n",
+        printf("sleep=%u mode=%x tick=%u away=%u pending=%u request=%u trace=%u mailbox=%u/%u deadline=%08x:%08x\n",
                word(0x5e0837b4), word(0x5e0837bc), word(0x16a), word(ctx+464),
                word(ctx+468), word(word(ctx+384)), word(0x5e0a4400),
-               word(0x5e0a4104), word(0x5e0a4108));
+               word(0x5e0a4104), word(0x5e0a4108), word(0x5e0837c0), word(0x5e0837c4));
         return 0;
     } else {
         ProcessSerialNumber self, target = {0, strtoul(argv[2], NULL, 16)};

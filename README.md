@@ -26,6 +26,8 @@ The goal with this project was to have the "best of both worlds". You can run OS
 
 - You can exit Classic by going to Special -> Shut Down in Finder.
 
+- OS 9 stays awake while it is fullscreen. After you switch to OS X, Classic uses the idle timeout from the Classic preference pane.
+
 - If Classic freezes, you can force-quit it by pressing Cmd+Opt+Ctrl+F12. Note that you also have to press "fn" on a Mac layout keyboard.
 
 ## Hardware compatibility

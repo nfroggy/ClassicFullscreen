@@ -614,6 +614,27 @@ L_000019a0:
     nop
     nop
     nop
+/* Only BAL's automatic idle timeout reaches this comparison. A private
+ * framebuffer exists while OS X owns the display (set/cleared by our
+ * handoff above). On the OS 9 desktop, use BAL's own deadline reset path.
+ * Its next idle call can then arm a full interval when switching away. */
+.org 0xfaf0
+    lis r12, 0x5e0a
+    lwz r12, 0x4424(r12)
+    cmpwi r12, 0
+    beq L_idle_reset_deadline
+    /* Unsigned 64-bit now (r30:r31) >= deadline? Carry after subfe is
+     * one for equality too. Fall through to Tiger's store of sleep mode. */
+    lwz r11, 0x37c4(r23)
+    lwz r12, 0x37c0(r23)
+    subfc r11, r11, r31
+    subfe r12, r12, r30
+    subfe. r0, r0, r0
+    bne L_idle_done
+.org 0xfb4c
+L_idle_reset_deadline:
+.org 0xfb6c
+L_idle_done:
 .org 0x125ec
     li r3, 1
 .org 0x1e348
