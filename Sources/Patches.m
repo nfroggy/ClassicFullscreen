@@ -169,6 +169,14 @@ static void writeRecovery(int fd, NSData *data) {
 - (NSArray *)specifications {
     return specs;
 }
+- (void)useSquareCorners {
+    NSDictionary *regular = [self spec:@"Resources"], *square = [regular objectForKey:@"squareCorners"];
+    CFRequire([[square objectForKey:@"name"] isEqual:@"Resources"], @"Missing square-corner resource patch");
+    NSMutableArray *selected = [specs mutableCopy];
+    [selected replaceObjectAtIndex:[specs indexOfObjectIdenticalTo:regular] withObject:square];
+    [specs release];
+    specs = selected;
+}
 - (NSDictionary *)spec:(NSString *)name {
     unsigned i;
     for (i = 0; i < [specs count]; i++) {

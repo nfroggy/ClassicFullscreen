@@ -532,6 +532,13 @@
 		<false/>
 		<key>payload</key>
 		<string>Resources.bin</string>
+		<key>squareCornerSegment</key>
+		<dict>
+			<key>offset</key>
+			<integer>393368</integer>
+			<key>length</key>
+			<integer>6</integer>
+		</dict>
 		<key>segments</key>
 		<array>
 			<dict>

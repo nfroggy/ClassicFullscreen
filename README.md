@@ -32,4 +32,6 @@ The goal with this project was to have the "best of both worlds". You can run OS
 
 - This only works on single monitor setups.
 
+- At startup, ClassicFullscreen checks the active display. A recognized LCD panel or a monitor reporting digital input gets square desktop and menu bar corners. Analog and unidentified displays use Classic’s usual corner shape.
+
 - I have tested this on both of the late-era PowerPC Macs I own, an iBook G4 and a Mac Mini G4. However, both of them have the same GPU, the Radeon 9200. Hopefully it works on other systems as well. It would be particularly interesting to see if this worked on a G5, as they are not capable of booting OS 9 natively at all without doing some major modifications to the operating system.

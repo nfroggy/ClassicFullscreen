@@ -33,6 +33,48 @@ static NSString *forkPath(CFPatches *p, NSDictionary *s) {
 static NSString *baseName(NSDictionary *s) {
     return [s objectForKey:@"prepare"] ? [s objectForKey:@"prepare"] : [s objectForKey:@"name"];
 }
+static void desktopCornerTests(CFPatches *patches) {
+    UInt8 block[128] = {0, 255, 255, 255, 255, 255, 255, 0};
+    block[18] = 1;
+    block[20] = 0x80;
+    block[127] = 0x85;
+    CFDataRef digital = (CFDataRef)[NSData dataWithBytes:block length:sizeof(block)];
+    block[20] = 0;
+    block[127] = 5;
+    CFDataRef analog = (CFDataRef)[NSData dataWithBytes:block length:sizeof(block)];
+    block[20] = 0x80;
+    CFDataRef damaged = (CFDataRef)[NSData dataWithBytes:block length:sizeof(block)];
+    CFTypeRef vga = (CFTypeRef)[NSNumber numberWithInt:kVGAConnect];
+    CFRequire(CFDisplayNeedsSquareCorners(vga, digital, NO) &&
+              !CFDisplayNeedsSquareCorners(vga, analog, NO) &&
+              !CFDisplayNeedsSquareCorners(NULL, damaged, NO) &&
+              !CFDisplayNeedsSquareCorners(NULL, NULL, NO) &&
+              !CFDisplayNeedsSquareCorners(CFSTR("LCD"), vga, NO) &&
+              !CFDisplayNeedsSquareCorners(NULL, (CFDataRef)[NSData dataWithBytes:block length:21], NO) &&
+              CFDisplayNeedsSquareCorners(NULL, NULL, YES), @"Unexpected display classification");
+    int panels[] = {kPanelTFTConnect, kPanelFSTNConnect, kGenericLCD};
+    unsigned i;
+    for (i = 0; i < sizeof(panels)/sizeof(panels[0]); i++)
+        CFRequire(CFDisplayNeedsSquareCorners((CFTypeRef)[NSNumber numberWithInt:panels[i]],
+                                              analog, NO), @"Driver-reported panel was ignored");
+
+    NSDictionary *regular = [patches spec:@"Resources"];
+    NSString *path = forkPath(patches, regular);
+    NSData *original = CFReadFile(path), *standard = [patches transform:original spec:regular];
+    [patches useSquareCorners];
+    [patches install:@"Resources" enabled:YES];
+    NSData *image = CFReadFile(path);
+    const UInt8 *plain = [standard bytes], *panel = [image bytes];
+    const UInt8 instructions[] = {0x42, 0x38, 0x0b, 0x3e, 0x60, 0x18};
+    unsigned start = 0x60098, end = start + sizeof(instructions);
+    CFRequire([standard length] == [image length] && [image length] >= end &&
+              !memcmp(plain, panel, start) && !memcmp(panel + start, instructions, sizeof(instructions)) &&
+              memcmp(plain + start, panel + start, sizeof(instructions)) &&
+              !memcmp(plain + end, panel + end, [image length] - end), @"Unexpected panel resource patch");
+    [patches install:@"Resources" enabled:NO];
+    CFRequire([CFReadFile(path) isEqual:original], @"Panel restoration changed the resource fork");
+    CFSLog(@"PASS: display classification, square corners and exact restoration");
+}
 static void elapsedTimeTests(void) {
     double before = CFMonotonicTime();
     usleep(50000);
@@ -361,6 +403,7 @@ int CFSelfTests(NSString *fixtures) {
               @"corrupt-backup and unknown-image refusal");
         resourceIdentityTests(p, fixtures);
         CFRecoveryTests(p, fixtures);
+        desktopCornerTests(p);
         graphicsIdentityTests(fixtures);
         CFControllerPolicyTests();
     } @finally {

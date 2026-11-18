@@ -1,4 +1,5 @@
 #import "CFClassic.h"
+#include <IOKit/graphics/IOGraphicsLib.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <mach-o/loader.h>
@@ -9,6 +10,38 @@
 #include <unistd.h>
 static void stopSignal(int s) {
     CFInterrupted = s;
+}
+/* Tiger exports this IOGraphicsLib function but omits its declaration from
+ * the 10.4 public header. Its returned IODisplay service is caller-owned. */
+extern io_service_t IODisplayForFramebuffer(io_service_t framebuffer, IOOptionBits options);
+
+BOOL CFDisplayNeedsSquareCorners(CFTypeRef panelType, CFTypeRef edid, BOOL backlight) {
+    int type = 0;
+    if (backlight || (panelType && CFGetTypeID(panelType) == CFNumberGetTypeID() &&
+        CFNumberGetValue((CFNumberRef)panelType, kCFNumberIntType, &type) &&
+        (type == kPanelTFTConnect || type == kPanelFSTNConnect || type == kGenericLCD)))
+        return YES;
+    if (!edid || CFGetTypeID(edid) != CFDataGetTypeID() || CFDataGetLength((CFDataRef)edid) < 128)
+        return NO;
+    const UInt8 *bytes = CFDataGetBytePtr((CFDataRef)edid);
+    static const UInt8 header[] = {0, 255, 255, 255, 255, 255, 255, 0};
+    if (memcmp(bytes, header, sizeof(header)) || bytes[18] != 1)
+        return NO;
+    unsigned i, sum = 0;
+    for (i = 0; i < 128; ++i) sum += bytes[i];
+    return !(sum & 255) && (bytes[20] & 0x80);
+}
+static BOOL squareCornersForDisplay(CGDirectDisplayID display) {
+    io_service_t framebuffer = CGDisplayIOServicePort(display);
+    io_service_t screen = framebuffer ? IODisplayForFramebuffer(framebuffer, 0) : IO_OBJECT_NULL;
+    if (!screen) return NO;
+    CFTypeRef type = IORegistryEntryCreateCFProperty(screen, CFSTR(kAppleDisplayTypeKey), NULL, 0);
+    CFTypeRef edid = IORegistryEntryCreateCFProperty(screen, CFSTR(kIODisplayEDIDKey), NULL, 0);
+    BOOL square = CFDisplayNeedsSquareCorners(type, edid, IOObjectConformsTo(screen, "IOBacklightDisplay"));
+    if (type) CFRelease(type);
+    if (edid) CFRelease(edid);
+    IOObjectRelease(screen);
+    return square;
 }
 static int sessionFile(NSString *name, int flags, mode_t mode) {
     return open([[CF_RUN stringByAppendingPathComponent:name] fileSystemRepresentation],
@@ -258,7 +291,7 @@ static void recoverBeforeLaunch(CFPatches *patches, BOOL interrupted, int emerge
     /* Failure above leaves the journal and backups intact for another launch
      * or --recover. Normal install/cleanup has not begun yet. */
 }
-void CFPreflight(void) {
+static void preflight(CFPatches *patches) {
     CFRequire(geteuid() == 0, @"Preflight requires administrator access");
     CFRequireConsoleUser();
     CFEnsureSystemFolder();
@@ -266,12 +299,6 @@ void CFPreflight(void) {
     CFRequire([selected isEqual:CFSystemFolder],
               @"Classic's selected System Folder changed; please start again.");
     CFRequire([CFClassicPIDs() count] == 0, @"Classic must be stopped");
-    CFPatches *p = [[CFPatches alloc] initWithRoot:@""];
-    @try {
-        [p verifyBaseline];
-    } @finally {
-        [p release];
-    }
     NSString *cg = @"/System/Library/Frameworks/ApplicationServices.framework/Versions/A/"
                    @"Frameworks/CoreGraphics.framework/Versions/A/CoreGraphics";
     CFVerifyCoreGraphics(CFReadFile(cg));
@@ -281,6 +308,10 @@ void CFPreflight(void) {
     CGDisplayCount displays = 0;
     CFRequire(CGGetActiveDisplayList(0, NULL, &displays) == 0 && displays == 1,
               @"This version supports one active display. Disable additional displays before starting.");
+    BOOL square = squareCornersForDisplay(d);
+    if (square) [patches useSquareCorners];
+    [patches verifyBaseline];
+    CFSLog(@"Desktop corners: %@", square ? @"square (panel or digital input)" : @"guest default");
     unsigned w = CGDisplayPixelsWide(d), h = CGDisplayPixelsHigh(d),
              depth = CGDisplayBitsPerPixel(d), stride = CGDisplayBytesPerRow(d);
     CFRequire(CFSupportedDisplayDepth(depth) && w >= 640 && w <= 4096 && h >= 480 && h <= 2160 &&
@@ -288,6 +319,14 @@ void CFPreflight(void) {
                   !CGDisplayIsCaptured(d),
               @"Display must be awake and uncaptured, at 256, Thousands, or Millions of Colors");
     CFSLog(@"Preflight passed: %ux%u, %u-bit; display settings left unchanged", w, h, depth);
+}
+void CFPreflight(void) {
+    CFPatches *patches = [[CFPatches alloc] initWithRoot:@""];
+    @try {
+        preflight(patches);
+    } @finally {
+        [patches release];
+    }
 }
 static void stopController(pid_t *child, pid_t classic) {
     if (*child <= 0)
@@ -538,7 +577,7 @@ int CFGuardian(pid_t ui, BOOL recovery) {
                     recoverBeforeLaunch(patches, NO, emergencyFD);
                 }
             }
-            CFPreflight();
+            preflight(patches);
             canceled(emergencyFD);
             saveConfiguration(configurationPath());
             attempted = YES;

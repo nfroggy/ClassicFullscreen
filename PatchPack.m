@@ -146,6 +146,12 @@ static void apply(NSMutableData *image, NSDictionary *s, NSData *payload) {
         [image replaceBytesInRange:NSMakeRange(a, n) withBytes:(const char *)[payload bytes] + p];
     }
 }
+static void fingerprint(NSMutableDictionary *spec, NSData *payload, NSData *result) {
+    [spec setObject:md5(payload) forKey:@"payloadMD5"];
+    [spec setObject:md5(result) forKey:@"patchedMD5"];
+    if ([[spec objectForKey:@"resource"] boolValue])
+        [spec setObject:identityDigest(result, spec) forKey:@"normalizedPatchedMD5"];
+}
 int main(int argc, char **argv) {
     NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
     need(argc == 4 || argc == 5,
@@ -216,10 +222,22 @@ int main(int argc, char **argv) {
         apply(result, s, packed);
         NSMutableDictionary *g = [[s mutableCopy] autorelease];
         [g removeObjectForKey:@"assembledMD5"];
-        [g setObject:md5(packed) forKey:@"payloadMD5"];
-        [g setObject:md5(result) forKey:@"patchedMD5"];
-        if ([[s objectForKey:@"resource"] boolValue])
-            [g setObject:identityDigest(result, s) forKey:@"normalizedPatchedMD5"];
+        fingerprint(g, packed, result);
+        NSDictionary *extra = [g objectForKey:@"squareCornerSegment"];
+        if (extra) {
+            need([name isEqual:@"Resources"], @"Unexpected corner patch target");
+            [g removeObjectForKey:@"squareCornerSegment"];
+            NSMutableDictionary *square = [[g mutableCopy] autorelease];
+            NSMutableDictionary *range = [[extra mutableCopy] autorelease];
+            [range setObject:[NSNumber numberWithUnsignedInt:[packed length]] forKey:@"payloadOffset"];
+            [square setObject:[[s objectForKey:@"segments"] arrayByAddingObject:range] forKey:@"segments"];
+            [square setObject:@"ResourcesSquare.bin" forKey:@"payload"];
+            NSData *code = pack(square, objects);
+            apply(result, square, code);
+            fingerprint(square, code, result);
+            [payloads setObject:code forKey:@"ResourcesSquare"];
+            [g setObject:square forKey:@"squareCorners"];
+        }
         [generated addObject:g];
     }
     for (i = 0; i < [generated count]; i++) {
@@ -232,6 +250,8 @@ int main(int argc, char **argv) {
                [name UTF8String], (unsigned long)[packed length],
                [[s objectForKey:@"patchedMD5"] UTF8String]);
     }
+    need([[payloads objectForKey:@"ResourcesSquare"] writeToFile:[output stringByAppendingPathComponent:@"ResourcesSquare.bin"]
+                                                  atomically:YES], @"Cannot write square-corner resource payload");
     need([generated writeToFile:[output stringByAppendingPathComponent:@"Manifest.plist"]
                      atomically:YES], @"Cannot write generated patch manifest");
     need([sleepPayload writeToFile:[output stringByAppendingPathComponent:@"Sleep.bin"] atomically:YES] &&

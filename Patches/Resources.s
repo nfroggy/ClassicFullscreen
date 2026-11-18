@@ -18,3 +18,10 @@
 .org 0x52734
     .byte 0x60
 .org 0x52739
+/* Panel/digital variant of the Display Manager in gpch 144. At the start
+ * of its per-device loop, clear low-memory NTSC and take the existing path
+ * that clears QuickDraw's roundedDevice flag. OS 9 draws both the desktop
+ * region and the themed menu bar from those values. */
+.org 0x60098
+    .short 0x4238, 0x0b3e              /* clr.b NTSC.w */
+    .short 0x6018                      /* bra.s $600b6 (square-device path) */
