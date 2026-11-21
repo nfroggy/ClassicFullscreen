@@ -67,7 +67,7 @@ void CFVerifyCoreGraphics(NSData *data);
     BOOL willSleep, woke, canceled;
     task_t bridgeTask;
     vm_address_t bridgeCode;
-    uint32_t sleepVector, originalSleep;
+    uint32_t sleepVector, originalSleep, originalDiskCompletion;
     BOOL bridgePublished;
 }
 - (void)drain;
